@@ -20,7 +20,7 @@ export default function PageRenderer() {
   const [toasts, setToasts] = useState([]);
 
   const showToast = (message, type = 'success') => {
-    const id = Date.now();
+    const id = Date.now() + Math.random();
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
@@ -39,41 +39,204 @@ export default function PageRenderer() {
     const container = containerRef.current;
     if (!container) return;
 
+    // Đóng tất cả menu 3 chấm đang mở
+    const closeAllRowMenus = () => {
+      document.querySelectorAll('.product-row-menu-panel.is-positioned').forEach(p => {
+        p.classList.remove('is-positioned');
+        if (p.hidePopover) {
+          try { p.hidePopover(); } catch (err) {}
+        }
+      });
+    };
+
     // 1. Lắng nghe ô tìm kiếm trong bảng để lọc dòng tức thì
     function handleInput(e) {
       const input = e.target;
-      if (input.type === 'search' || input.placeholder?.toLowerCase().includes('tìm') || input.placeholder?.toLowerCase().includes('search')) {
+      if (
+        input.type === 'search' || 
+        input.hasAttribute('data-c-search') ||
+        input.placeholder?.toLowerCase().includes('tìm') || 
+        input.placeholder?.toLowerCase().includes('search')
+      ) {
         const query = input.value.trim().toLowerCase();
-        const table = container.querySelector('tbody');
-        if (table) {
-          table.querySelectorAll('tr').forEach(row => {
-            const text = row.textContent.toLowerCase();
-            row.style.display = text.includes(query) ? '' : 'none';
-          });
+        const rows = container.querySelectorAll('tbody tr, .product-table tbody tr');
+        let matchCount = 0;
+        rows.forEach(row => {
+          const text = row.textContent.toLowerCase();
+          const matches = text.includes(query);
+          row.style.display = matches ? '' : 'none';
+          if (matches) matchCount++;
+        });
+
+        // Cập nhật số lượng sản phẩm phù hợp nếu có thẻ báo
+        const matchLabel = container.querySelector('.product-list-heading small, .c-resource small');
+        if (matchLabel && query) {
+          matchLabel.textContent = `${matchCount} sản phẩm phù hợp`;
         }
       }
     }
 
-    // 2. Lắng nghe thay đổi dropdown select để lọc bảng
+    // 2. Lắng nghe thay đổi dropdown select để lọc bảng hoặc checkbox chọn
     function handleChange(e) {
-      const select = e.target;
-      if (select.tagName === 'SELECT') {
-        const val = select.value.toLowerCase();
-        showToast(`Đã lọc theo: ${select.options[select.selectedIndex]?.text || val}`);
-        const table = container.querySelector('tbody');
-        if (table && val && !val.includes('all') && !val.includes('tất cả')) {
-          table.querySelectorAll('tr').forEach((row, idx) => {
-            row.style.display = idx % 2 === 0 ? '' : 'none';
+      const target = e.target;
+
+      // Select dropdown lọc danh mục hoặc trạng thái
+      if (target.tagName === 'SELECT') {
+        const val = target.value.toLowerCase();
+        showToast(`Đã lọc theo: ${target.options[target.selectedIndex]?.text || val}`);
+        const rows = container.querySelectorAll('tbody tr');
+        if (rows.length > 0 && val && !val.includes('all') && !val.includes('tất cả')) {
+          rows.forEach((row, idx) => {
+            const rowText = row.textContent.toLowerCase();
+            row.style.display = rowText.includes(val) || idx % 2 === 0 ? '' : 'none';
           });
-        } else if (table) {
-          table.querySelectorAll('tr').forEach(row => row.style.display = '');
+        } else if (rows.length > 0) {
+          rows.forEach(row => row.style.display = '');
         }
+        return;
+      }
+
+      // Checkbox chọn tất cả (Select All)
+      if (target.hasAttribute('data-c-select-all') || target.classList.contains('select-all')) {
+        const isChecked = target.checked;
+        const itemBoxes = container.querySelectorAll('tbody input[type="checkbox"], [data-c-select]');
+        itemBoxes.forEach(box => {
+          box.checked = isChecked;
+        });
+
+        const selectionBar = container.querySelector('.c-selection');
+        if (selectionBar) {
+          selectionBar.hidden = !isChecked;
+          const countStrong = selectionBar.querySelector('strong');
+          if (countStrong) {
+            countStrong.textContent = isChecked ? `${itemBoxes.length} đã chọn` : '0 đã chọn';
+          }
+        }
+        return;
+      }
+
+      // Checkbox chọn từng dòng
+      if (target.hasAttribute('data-c-select') || target.closest('td.c-check')) {
+        const itemBoxes = container.querySelectorAll('tbody input[type="checkbox"]:checked, [data-c-select]:checked');
+        const selectionBar = container.querySelector('.c-selection');
+        if (selectionBar) {
+          selectionBar.hidden = itemBoxes.length === 0;
+          const countStrong = selectionBar.querySelector('strong');
+          if (countStrong) {
+            countStrong.textContent = `${itemBoxes.length} đã chọn`;
+          }
+        }
+        return;
       }
     }
 
     // 3. Lắng nghe tất cả các Click sự kiện
     function handleClick(e) {
-      // A. Điều hướng link nội bộ SPA
+      // A. Nút 3 chấm mở menu thao tác (.product-row-menu-trigger)
+      const menuTrigger = e.target.closest('.product-row-menu-trigger');
+      if (menuTrigger) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const panelId = menuTrigger.getAttribute('popovertarget');
+        const panel = panelId 
+          ? document.getElementById(panelId) 
+          : menuTrigger.parentElement.querySelector('.product-row-menu-panel');
+
+        if (!panel) return;
+
+        const isAlreadyOpen = panel.classList.contains('is-positioned');
+        closeAllRowMenus();
+
+        if (!isAlreadyOpen) {
+          const rect = menuTrigger.getBoundingClientRect();
+          const menuWidth = 200;
+          let left = rect.right - menuWidth;
+          if (left < 12) left = 12;
+          if (left + menuWidth > window.innerWidth - 12) left = window.innerWidth - menuWidth - 12;
+
+          let top = rect.bottom + 6;
+          if (top + 260 > window.innerHeight) {
+            top = Math.max(12, rect.top - 260);
+          }
+
+          panel.style.setProperty('--row-menu-top', `${top}px`);
+          panel.style.setProperty('--row-menu-left', `${left}px`);
+          panel.classList.add('is-positioned');
+
+          if (panel.showPopover) {
+            try { panel.showPopover(); } catch (err) {}
+          }
+        }
+        return;
+      }
+
+      // B. Nút bên trong Menu Thao Tác (.product-row-menu-panel button)
+      const menuActionBtn = e.target.closest('.product-row-menu-panel button');
+      if (menuActionBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeAllRowMenus();
+
+        const action = menuActionBtn.dataset.cAction || menuActionBtn.dataset.action || '';
+        const rawId = menuActionBtn.dataset.id || '';
+        const tr = menuActionBtn.closest('tr');
+        const prodName = tr ? (tr.querySelector('.product-record-name strong, .c-record-name strong')?.textContent.trim() || 'Sản phẩm') : 'Sản phẩm';
+        const prodSku = tr ? (tr.querySelector('.product-mono')?.textContent.trim() || 'VX-1001') : 'VX-1001';
+
+        if (action === 'detail' || menuActionBtn.textContent.includes('Xem')) {
+          setActiveModal({
+            type: 'product',
+            title: `Chi tiết sản phẩm: ${prodName}`,
+            data: { id: prodName, sku: prodSku }
+          });
+        } else if (action === 'edit' || menuActionBtn.textContent.includes('Chỉnh sửa')) {
+          setActiveModal({
+            type: 'edit-product',
+            title: `Chỉnh sửa thông tin: ${prodName}`,
+            data: { name: prodName, sku: prodSku, price: '49.00', stock: '148' }
+          });
+        } else if (action.includes('duplicate') || menuActionBtn.textContent.includes('Nhân bản')) {
+          showToast(`✓ Đã nhân bản sản phẩm "${prodName}" thành công!`);
+          if (tr && tr.parentElement) {
+            const clone = tr.cloneNode(true);
+            clone.style.backgroundColor = 'rgba(217, 119, 6, 0.08)';
+            const nameEl = clone.querySelector('.product-record-name strong, .c-record-name strong');
+            if (nameEl) nameEl.textContent = `${prodName} (Bản sao)`;
+            tr.parentElement.insertBefore(clone, tr.nextSibling);
+          }
+        } else if (action.includes('share') || menuActionBtn.textContent.includes('Chia sẻ')) {
+          const shareUrl = window.location.origin + '/commerce/products?highlight=' + (rawId || encodeURIComponent(prodName));
+          try {
+            navigator.clipboard.writeText(shareUrl);
+          } catch (err) {}
+          showToast(`✓ Đã sao chép liên kết chia sẻ cho "${prodName}"!`);
+        } else if (action.includes('activity') || menuActionBtn.textContent.includes('Lịch sử')) {
+          setActiveModal({
+            type: 'activity',
+            title: `Lịch sử thao tác: ${prodName}`,
+            data: { name: prodName, sku: prodSku }
+          });
+        } else if (action.includes('delete') || menuActionBtn.textContent.includes('Xóa')) {
+          if (tr) {
+            tr.style.transition = 'all 0.3s ease';
+            tr.style.opacity = '0';
+            tr.style.transform = 'translateX(30px)';
+            setTimeout(() => tr.remove(), 300);
+          }
+          showToast(`✓ Đã xóa sản phẩm "${prodName}" khỏi danh mục!`, 'info');
+        } else {
+          showToast(`✓ Thao tác: ${menuActionBtn.textContent.trim()}`);
+        }
+        return;
+      }
+
+      // Đóng menu nếu click ra ngoài
+      if (!e.target.closest('.product-row-menu')) {
+        closeAllRowMenus();
+      }
+
+      // C. Điều hướng link nội bộ SPA
       const link = e.target.closest('a');
       if (link) {
         const href = link.getAttribute('href');
@@ -85,170 +248,205 @@ export default function PageRenderer() {
         }
       }
 
-      // B. Xử lý các Button có data-action
-      const actionBtn = e.target.closest('[data-action]');
+      // D. Xử lý các Button có data-action hoặc data-c-action
+      const actionBtn = e.target.closest('[data-action], [data-c-action]');
       if (actionBtn) {
-        const action = actionBtn.dataset.action;
+        const action = actionBtn.dataset.action || actionBtn.dataset.cAction || '';
         const id = actionBtn.dataset.id;
         const text = actionBtn.textContent.trim();
 
-        switch (action) {
-          case 'assistant':
-            setActiveModal({
-              type: 'assistant',
-              title: 'Trợ lý AI Veylix (AI Assistant)',
-              wide: true
-            });
-            break;
+        // 1. Nhóm thao tác Sản phẩm (Commerce Products)
+        if (action === 'create' || action === 'add-product' || action === 'new-product' || text.includes('Thêm sản phẩm')) {
+          setActiveModal({
+            type: 'add-product',
+            title: 'Thêm sản phẩm mới vào danh mục'
+          });
+          return;
+        }
 
-          case 'reports':
-            setActiveModal({
-              type: 'reports',
-              title: 'Báo cáo hiệu suất kinh doanh',
-              wide: true
-            });
-            break;
+        if (action === 'product-import' || action === 'import' || text.includes('Nhập file')) {
+          setActiveModal({
+            type: 'import-products',
+            title: 'Nhập danh sách sản phẩm từ tệp (CSV / Excel)'
+          });
+          return;
+        }
 
-          case 'revenue':
-            setActiveModal({
-              type: 'revenue',
-              title: 'Chi tiết xu hướng doanh thu',
-              wide: true
-            });
-            break;
+        if (action === 'export' || action === 'export-sales' || text.includes('Xuất file')) {
+          showToast('✓ Đang khởi tạo và tải xuống tệp Veylix_Export.csv thành công!');
+          return;
+        }
 
-          case 'fulfillment':
-            setActiveModal({
-              type: 'fulfillment',
-              title: 'Tổng quan quy trình vận chuyển & đóng gói',
-              wide: true
-            });
-            break;
+        if (action === 'bulk-archive') {
+          const checkedRows = container.querySelectorAll('tbody tr:has(input[type="checkbox"]:checked)');
+          checkedRows.forEach(row => {
+            row.style.opacity = '0.4';
+            row.style.backgroundColor = '#f3f0e8';
+          });
+          showToast(`✓ Đã lưu trữ ${checkedRows.length} mục đã chọn!`);
+          return;
+        }
 
-          case 'shipments':
-          case 'deliveries':
-            setActiveModal({
-              type: 'shipments',
-              title: 'Hoạt động vận chuyển & Giao hàng gần đây',
-              wide: true
-            });
-            break;
+        if (action === 'clear-selection') {
+          const checkBoxes = container.querySelectorAll('tbody input[type="checkbox"], [data-c-select], [data-c-select-all]');
+          checkBoxes.forEach(b => b.checked = false);
+          const selBar = container.querySelector('.c-selection');
+          if (selBar) selBar.hidden = true;
+          showToast('Đã bỏ chọn tất cả các mục');
+          return;
+        }
 
-          case 'shipment':
-            setActiveModal({
-              type: 'shipment',
-              title: `Chi tiết vận đơn #${id || 'TRK-9821'}`,
-              data: { id: id || 'TRK-9821' }
-            });
-            break;
+        // 2. Nhóm Assistant & Báo cáo
+        if (action === 'assistant') {
+          setActiveModal({
+            type: 'assistant',
+            title: 'Trợ lý AI Veylix (AI Assistant)',
+            wide: true
+          });
+          return;
+        }
 
-          case 'channels':
-            setActiveModal({
-              type: 'channels',
-              title: 'Doanh số theo kênh bán hàng'
-            });
-            break;
+        if (action === 'reports') {
+          setActiveModal({
+            type: 'reports',
+            title: 'Báo cáo hiệu suất kinh doanh',
+            wide: true
+          });
+          return;
+        }
 
-          case 'regions':
-            setActiveModal({
-              type: 'regions',
-              title: 'Thị phần theo khu vực mua sắm'
-            });
-            break;
+        if (action === 'revenue') {
+          setActiveModal({
+            type: 'revenue',
+            title: 'Chi tiết xu hướng doanh thu',
+            wide: true
+          });
+          return;
+        }
 
-          case 'orders':
-            navigate('/commerce/orders');
-            break;
+        if (action === 'fulfillment') {
+          setActiveModal({
+            type: 'fulfillment',
+            title: 'Tổng quan quy trình vận chuyển & đóng gói',
+            wide: true
+          });
+          return;
+        }
 
-          case 'order':
-            setActiveModal({
-              type: 'order',
-              title: `Chi tiết đơn hàng #${id || 'VX83291'}`,
-              data: { id: id || 'VX83291' }
-            });
-            break;
+        if (action === 'shipments' || action === 'deliveries') {
+          setActiveModal({
+            type: 'shipments',
+            title: 'Hoạt động vận chuyển & Giao hàng gần đây',
+            wide: true
+          });
+          return;
+        }
 
-          case 'products':
-            navigate('/commerce/products');
-            break;
+        if (action === 'shipment') {
+          setActiveModal({
+            type: 'shipment',
+            title: `Chi tiết vận đơn #${id || 'TRK-9821'}`,
+            data: { id: id || 'TRK-9821' }
+          });
+          return;
+        }
 
-          case 'product':
-            setActiveModal({
-              type: 'product',
-              title: `Chi tiết sản phẩm: ${id || text || 'Sản phẩm'}`,
-              data: { id: id || text }
-            });
-            break;
+        if (action === 'channels') {
+          setActiveModal({
+            type: 'channels',
+            title: 'Doanh số theo kênh bán hàng'
+          });
+          return;
+        }
 
-          case 'inventory':
-          case 'low-stock':
-            setActiveModal({
-              type: 'low-stock',
-              title: 'Danh sách sản phẩm tồn kho thấp cần nhập thêm',
-              wide: true
-            });
-            break;
+        if (action === 'regions') {
+          setActiveModal({
+            type: 'regions',
+            title: 'Thị phần theo khu vực mua sắm'
+          });
+          return;
+        }
 
-          case 'restock':
-            showToast(`✓ Đã tạo lệnh nhập thêm hàng cho: ${id || 'sản phẩm'}`);
-            break;
+        if (action === 'orders') {
+          navigate('/commerce/orders');
+          return;
+        }
 
-          case 'payments':
-            setActiveModal({
-              type: 'payments',
-              title: 'Cơ cấu các phương thức thanh toán'
-            });
-            break;
+        if (action === 'order') {
+          setActiveModal({
+            type: 'order',
+            title: `Chi tiết đơn hàng #${id || 'VX83291'}`,
+            data: { id: id || 'VX83291' }
+          });
+          return;
+        }
 
-          case 'add-product':
-          case 'new-product':
-            setActiveModal({
-              type: 'add-product',
-              title: 'Thêm sản phẩm mới vào danh mục'
-            });
-            break;
+        if (action === 'products') {
+          navigate('/commerce/products');
+          return;
+        }
 
-          case 'create-discount':
-            setActiveModal({
-              type: 'create-discount',
-              title: 'Tạo mã giảm giá mới'
-            });
-            break;
+        if (action === 'product') {
+          setActiveModal({
+            type: 'product',
+            title: `Chi tiết sản phẩm: ${id || text || 'Sản phẩm'}`,
+            data: { id: id || text }
+          });
+          return;
+        }
 
-          case 'campaign':
-            setActiveModal({
-              type: 'campaign',
-              title: 'Tạo chiến dịch tiếp thị mới'
-            });
-            break;
+        if (action === 'inventory' || action === 'low-stock') {
+          setActiveModal({
+            type: 'low-stock',
+            title: 'Danh sách sản phẩm tồn kho thấp cần nhập thêm',
+            wide: true
+          });
+          return;
+        }
 
-          case 'export':
-          case 'export-sales':
-            showToast('✓ Đang xuất tệp dữ liệu CSV thành công!');
-            break;
+        if (action === 'restock') {
+          showToast(`✓ Đã tạo lệnh nhập thêm hàng cho: ${id || 'sản phẩm'}`);
+          return;
+        }
 
-          case 'filter':
-            const filterBar = container.querySelector('.table-filters, .filter-bar, .c-filter-bar, .catalog-toolbar');
-            if (filterBar) {
-              filterBar.classList.toggle('open');
-              showToast('Đã bật/tắt thanh công cụ bộ lọc');
-            }
-            break;
+        if (action === 'payments') {
+          setActiveModal({
+            type: 'payments',
+            title: 'Cơ cấu các phương thức thanh toán'
+          });
+          return;
+        }
 
-          default:
-            if (action.includes('delete') || action.includes('remove')) {
-              showToast('✓ Đã xóa mục thành công!', 'info');
-            } else if (action.includes('save') || action.includes('submit')) {
-              showToast('✓ Đã lưu thay đổi thành công!');
-            } else {
-              showToast(`Thao tác: ${actionBtn.textContent.trim() || action}`);
-            }
-            break;
+        if (action === 'create-discount') {
+          setActiveModal({
+            type: 'create-discount',
+            title: 'Tạo mã giảm giá mới'
+          });
+          return;
+        }
+
+        if (action === 'campaign') {
+          setActiveModal({
+            type: 'campaign',
+            title: 'Tạo chiến dịch tiếp thị mới'
+          });
+          return;
+        }
+
+        // Xử lý chung các nút hành động còn lại
+        if (action.includes('delete') || action.includes('remove')) {
+          showToast('✓ Đã xóa mục thành công!', 'info');
+        } else if (action.includes('save') || action.includes('submit')) {
+          showToast('✓ Đã lưu thay đổi thành công!');
+        } else if (action === 'sort') {
+          showToast(`Đã sắp xếp theo: ${actionBtn.dataset.key || 'cột'}`);
+        } else {
+          showToast(`✓ Thao tác: ${text || action}`);
         }
         return;
       }
 
-      // C. Xử lý Click vào các cell dữ liệu trong Table (Mã đơn hàng, Tên sản phẩm, Tên khách hàng...)
+      // E. Xử lý Click vào các cell dữ liệu trong Table (Mã đơn hàng, Tên sản phẩm, Tên khách hàng...)
       const orderCell = e.target.closest('.order-number, .shipment-order-cell');
       if (orderCell) {
         const orderId = orderCell.textContent.trim().replace('#', '');
@@ -261,8 +459,8 @@ export default function PageRenderer() {
       }
 
       const productCell = e.target.closest('.product-record-name, .product-row, .inventory-product-name, .c-record-name');
-      if (productCell && !productCell.closest('a')) {
-        const prodName = productCell.textContent.trim();
+      if (productCell && !productCell.closest('a') && !productCell.closest('.product-actions-cell')) {
+        const prodName = productCell.querySelector('strong')?.textContent.trim() || productCell.textContent.trim();
         setActiveModal({
           type: 'product',
           title: `Chi tiết sản phẩm: ${prodName}`,
@@ -282,14 +480,14 @@ export default function PageRenderer() {
         return;
       }
 
-      // D. Nút Primary / Secondary Buttons
+      // F. Nút Primary / Secondary Buttons tổng quát
       const primaryBtn = e.target.closest('.primary-button, .quick-action');
-      if (primaryBtn && !primaryBtn.dataset.action) {
+      if (primaryBtn && !primaryBtn.dataset.action && !primaryBtn.dataset.cAction) {
         const btnText = primaryBtn.textContent.trim();
         if (btnText.toLowerCase().includes('thêm') || btnText.toLowerCase().includes('add') || btnText.toLowerCase().includes('new')) {
           setActiveModal({
             type: 'add-product',
-            title: btnText
+            title: 'Thêm sản phẩm mới vào danh mục'
           });
         } else {
           showToast(`✓ Đã thực hiện: ${btnText}`);
@@ -298,17 +496,22 @@ export default function PageRenderer() {
       }
 
       const secondaryBtn = e.target.closest('.secondary-button');
-      if (secondaryBtn && !secondaryBtn.dataset.action) {
+      if (secondaryBtn && !secondaryBtn.dataset.action && !secondaryBtn.dataset.cAction) {
         const btnText = secondaryBtn.textContent.trim();
         if (btnText.toLowerCase().includes('xuất') || btnText.toLowerCase().includes('export')) {
           showToast('✓ Đang xuất tệp dữ liệu CSV...');
+        } else if (btnText.toLowerCase().includes('nhập') || btnText.toLowerCase().includes('import')) {
+          setActiveModal({
+            type: 'import-products',
+            title: 'Nhập danh sách sản phẩm từ tệp (CSV / Excel)'
+          });
         } else {
           showToast(`✓ Đã áp dụng: ${btnText}`);
         }
         return;
       }
 
-      // E. Xử lý Chuyển Tab (Role="tab", tab-item, filter buttons)
+      // G. Xử lý Chuyển Tab (Role="tab", tab-item, filter buttons)
       const tabBtn = e.target.closest('[role="tab"], .tab-item, .category-select-arrow');
       if (tabBtn) {
         const tabList = tabBtn.closest('[role="tablist"], .tabs-nav, .tab-group, .c-filter-group');
@@ -334,7 +537,7 @@ export default function PageRenderer() {
         return;
       }
 
-      // F. Xử lý Phân trang (Pagination buttons)
+      // H. Xử lý Phân trang (Pagination buttons)
       const pageBtn = e.target.closest('[data-page-kind], .dashboard-pagination button, .pagination button');
       if (pageBtn && !pageBtn.disabled) {
         const parentNav = pageBtn.closest('nav, .pagination');
@@ -351,10 +554,15 @@ export default function PageRenderer() {
     container.addEventListener('input', handleInput);
     container.addEventListener('change', handleChange);
 
+    // Đóng menu khi scroll cửa sổ
+    const handleScroll = () => closeAllRowMenus();
+    window.addEventListener('scroll', handleScroll, true);
+
     return () => {
       container.removeEventListener('click', handleClick);
       container.removeEventListener('input', handleInput);
       container.removeEventListener('change', handleChange);
+      window.removeEventListener('scroll', handleScroll, true);
     };
   }, [navigate]);
 
@@ -505,6 +713,259 @@ export default function PageRenderer() {
           </div>
         )}
 
+        {/* Modal Thêm sản phẩm mới chuẩn Tiếng Việt & Thiết kế tinh tế */}
+        {activeModal?.type === 'add-product' && (
+          <div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '6px', color: '#302d24' }}>
+                  Tên sản phẩm <span style={{ color: '#d97706' }}>*</span>
+                </label>
+                <input 
+                  placeholder="Ví dụ: Áo sơ mi Linen thoáng mát, Balo du lịch cao cấp..." 
+                  defaultValue=""
+                  style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid #d4c7b2', fontSize: '13px', outline: 'none', background: '#fff' }} 
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '6px', color: '#302d24' }}>
+                    Danh mục ngành hàng
+                  </label>
+                  <select style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid #d4c7b2', fontSize: '13px', outline: 'none', background: '#fff' }}>
+                    <option value="Clothing">Thời trang & May mặc</option>
+                    <option value="Bags">Balo & Túi xách</option>
+                    <option value="Home">Đồ gia dụng & Nội thất</option>
+                    <option value="Electronics">Thiết bị công nghệ</option>
+                    <option value="Accessories">Phụ kiện thời trang</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '6px', color: '#302d24' }}>
+                    Mã sản phẩm (SKU)
+                  </label>
+                  <input 
+                    placeholder="VX-2009" 
+                    defaultValue="VX-2009"
+                    style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid #d4c7b2', fontSize: '13px', outline: 'none', background: '#fff' }} 
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '6px', color: '#302d24' }}>
+                    Giá bán niêm yết ($) <span style={{ color: '#d97706' }}>*</span>
+                  </label>
+                  <input 
+                    type="number" 
+                    placeholder="49.00" 
+                    defaultValue="49.00"
+                    style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid #d4c7b2', fontSize: '13px', outline: 'none', background: '#fff' }} 
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '6px', color: '#302d24' }}>
+                    Số lượng tồn kho ban đầu
+                  </label>
+                  <input 
+                    type="number" 
+                    placeholder="100" 
+                    defaultValue="100"
+                    style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid #d4c7b2', fontSize: '13px', outline: 'none', background: '#fff' }} 
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '6px', color: '#302d24' }}>
+                  Mô tả ngắn gọn
+                </label>
+                <textarea 
+                  rows={3}
+                  placeholder="Mô tả đặc điểm nổi bật, chất liệu hoặc tính năng của sản phẩm..."
+                  style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid #d4c7b2', fontSize: '13px', outline: 'none', resize: 'vertical', background: '#fff' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px', paddingTop: '14px', borderTop: '1px solid #e8decb' }}>
+                <button 
+                  type="button" 
+                  onClick={() => setActiveModal(null)}
+                  style={{ padding: '9px 18px', background: '#fff', border: '1px solid #d4c7b2', borderRadius: '9px', cursor: 'pointer', fontSize: '13px', fontWeight: '600', color: '#524939' }}
+                >
+                  Hủy bỏ
+                </button>
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    showToast('✓ Đã tạo và thêm sản phẩm mới vào danh mục thành công!');
+                    setActiveModal(null);
+                  }}
+                  style={{ padding: '9px 20px', background: '#25211d', color: '#fff', border: 'none', borderRadius: '9px', cursor: 'pointer', fontWeight: '600', fontSize: '13px' }}
+                >
+                  Lưu sản phẩm
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Chỉnh sửa sản phẩm */}
+        {activeModal?.type === 'edit-product' && (
+          <div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '6px', color: '#302d24' }}>
+                  Tên sản phẩm
+                </label>
+                <input 
+                  defaultValue={activeModal.data?.name} 
+                  style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid #d4c7b2', fontSize: '13px', outline: 'none', background: '#fff' }} 
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '6px', color: '#302d24' }}>
+                    Giá bán hiện tại ($)
+                  </label>
+                  <input 
+                    type="number" 
+                    defaultValue={activeModal.data?.price || '49.00'} 
+                    style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid #d4c7b2', fontSize: '13px', outline: 'none', background: '#fff' }} 
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '6px', color: '#302d24' }}>
+                    Số lượng tồn kho
+                  </label>
+                  <input 
+                    type="number" 
+                    defaultValue={activeModal.data?.stock || '148'} 
+                    style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid #d4c7b2', fontSize: '13px', outline: 'none', background: '#fff' }} 
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', marginBottom: '6px', color: '#302d24' }}>
+                  Trạng thái kinh doanh
+                </label>
+                <select defaultValue="Active" style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid #d4c7b2', fontSize: '13px', outline: 'none', background: '#fff' }}>
+                  <option value="Active">Đang bán (Hiển thị cho người mua)</option>
+                  <option value="Draft">Bản nháp (Tạm ẩn)</option>
+                  <option value="Archived">Đã lưu trữ</option>
+                </select>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px', paddingTop: '14px', borderTop: '1px solid #e8decb' }}>
+                <button 
+                  type="button" 
+                  onClick={() => setActiveModal(null)}
+                  style={{ padding: '9px 18px', background: '#fff', border: '1px solid #d4c7b2', borderRadius: '9px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}
+                >
+                  Đóng
+                </button>
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    showToast(`✓ Đã cập nhật sản phẩm "${activeModal.data?.name}" thành công!`);
+                    setActiveModal(null);
+                  }}
+                  style={{ padding: '9px 20px', background: '#25211d', color: '#fff', border: 'none', borderRadius: '9px', cursor: 'pointer', fontWeight: '600', fontSize: '13px' }}
+                >
+                  Lưu thay đổi
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Nhập file CSV / Excel */}
+        {activeModal?.type === 'import-products' && (
+          <div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div 
+                style={{ 
+                  border: '2px dashed #c9baa1', 
+                  borderRadius: '14px', 
+                  padding: '30px 20px', 
+                  textAlign: 'center', 
+                  backgroundColor: '#fffdfa',
+                  cursor: 'pointer'
+                }}
+                onClick={() => showToast('Đang mở hộp thoại chọn tệp CSV...')}
+              >
+                <span className="icon" style={{ width: '42px', height: '42px', color: '#8b6e2f', margin: '0 auto 10px', display: 'flex' }}>
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor">
+                    <path d="M213.66,82.34l-56-56A8,8,0,0,0,152,24H56A16,16,0,0,0,40,40V216a16,16,0,0,0,16,16H200a16,16,0,0,0,16-16V88A8,8,0,0,0,213.66,82.34ZM152,43.31,196.69,88H152ZM200,216H56V40h80V88a8,8,0,0,0,8,8h48V216Z"></path>
+                  </svg>
+                </span>
+                <strong style={{ display: 'block', fontSize: '14px', marginBottom: '4px' }}>Kéo thả tệp CSV hoặc Excel vào đây</strong>
+                <span style={{ fontSize: '12px', color: '#7c7162' }}>Hỗ trợ định dạng .csv, .xlsx, tối đa 50MB</span>
+              </div>
+
+              <div style={{ backgroundColor: '#f9f5ed', borderRadius: '10px', padding: '12px 16px', fontSize: '12px', color: '#685947', lineHeight: 1.6 }}>
+                💡 <strong>Mẹo:</strong> Tệp CSV cần có các cột chuẩn: <code>Title, SKU, Category, Price, Inventory, Status</code>. Bạn có thể tải mẫu chuẩn <a href="#download-sample" onClick={(e) => { e.preventDefault(); showToast('Đã tải xuống tệp mẫu veylix-template.csv'); }} style={{ color: '#b45309', textDecoration: 'underline', fontWeight: 'bold' }}>tại đây</a>.
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', paddingTop: '10px', borderTop: '1px solid #e8decb' }}>
+                <button 
+                  type="button" 
+                  onClick={() => setActiveModal(null)}
+                  style={{ padding: '9px 18px', background: '#fff', border: '1px solid #d4c7b2', borderRadius: '9px', cursor: 'pointer', fontSize: '13px' }}
+                >
+                  Hủy
+                </button>
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    showToast('✓ Đã nhập thành công 48 sản phẩm mới từ tệp!');
+                    setActiveModal(null);
+                  }}
+                  style={{ padding: '9px 20px', background: '#25211d', color: '#fff', border: 'none', borderRadius: '9px', cursor: 'pointer', fontWeight: '600', fontSize: '13px' }}
+                >
+                  Bắt đầu nhập dữ liệu
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Lịch sử hoạt động */}
+        {activeModal?.type === 'activity' && (
+          <div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {[
+                { time: '10 phút trước', author: 'Alex Chen', desc: 'Đã cập nhật số lượng tồn kho từ 120 lên 148 chiếc' },
+                { time: 'Hôm qua lúc 14:30', author: 'Sarah Kim', desc: 'Đã xuất hóa đơn giao nhận cho đơn hàng #VX83290' },
+                { time: '3 ngày trước', author: 'Hệ thống tự động', desc: 'Đồng bộ giá bán trên Sàn thương mại điện tử ($30.80)' },
+                { time: '18 Tháng 7, 2026', author: 'Alex Chen', desc: 'Tạo mới sản phẩm và đưa vào danh mục kinh doanh' }
+              ].map((act, i) => (
+                <div key={i} style={{ padding: '12px', background: '#f9f5ed', borderRadius: '10px', fontSize: '13px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <strong style={{ color: '#25211d' }}>{act.author}</strong>
+                    <small style={{ color: '#887d6e' }}>{act.time}</small>
+                  </div>
+                  <span style={{ color: '#554d3f' }}>{act.desc}</span>
+                </div>
+              ))}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
+                <button 
+                  type="button" 
+                  onClick={() => setActiveModal(null)}
+                  style={{ padding: '9px 18px', background: '#25211d', color: '#fff', border: 'none', borderRadius: '9px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}
+                >
+                  Đóng
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Báo cáo doanh số */}
         {activeModal?.type === 'reports' && (
           <div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '18px' }}>
@@ -536,146 +997,7 @@ export default function PageRenderer() {
           </div>
         )}
 
-        {activeModal?.type === 'revenue' && (
-          <div>
-            <p style={{ color: '#685947', fontSize: '13px', marginBottom: '12px' }}>
-              Số liệu đối chiếu doanh thu theo chu kỳ 4 tuần gần nhất (Đơn vị: nghìn USD):
-            </p>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid #e8decb', textAlign: 'left', background: '#f9f5ed' }}>
-                  <th style={{ padding: '10px 12px' }}>Giai đoạn</th>
-                  <th style={{ padding: '10px 12px' }}>Kỳ hiện tại ($K)</th>
-                  <th style={{ padding: '10px 12px' }}>Kỳ trước ($K)</th>
-                  <th style={{ padding: '10px 12px' }}>Biến động</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr style={{ borderBottom: '1px solid #f2ece1' }}><td style={{ padding: '9px 12px' }}>Tuần 1</td><td style={{ padding: '9px 12px' }}>$24.5</td><td style={{ padding: '9px 12px' }}>$20.1</td><td style={{ padding: '9px 12px', color: '#25975d' }}>+21.8%</td></tr>
-                <tr style={{ borderBottom: '1px solid #f2ece1' }}><td style={{ padding: '9px 12px' }}>Tuần 2</td><td style={{ padding: '9px 12px' }}>$35.2</td><td style={{ padding: '9px 12px' }}>$28.4</td><td style={{ padding: '9px 12px', color: '#25975d' }}>+23.9%</td></tr>
-                <tr style={{ borderBottom: '1px solid #f2ece1' }}><td style={{ padding: '9px 12px' }}>Tuần 3</td><td style={{ padding: '9px 12px' }}>$55.0</td><td style={{ padding: '9px 12px' }}>$40.0</td><td style={{ padding: '9px 12px', color: '#25975d' }}>+37.5%</td></tr>
-                <tr><td style={{ padding: '9px 12px' }}>Tuần 4</td><td style={{ padding: '9px 12px' }}>$95.0</td><td style={{ padding: '9px 12px' }}>$68.0</td><td style={{ padding: '9px 12px', color: '#25975d' }}>+39.7%</td></tr>
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {activeModal?.type === 'fulfillment' && (
-          <div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '14px' }}>
-              <div style={{ padding: '12px', background: '#f7f2ea', borderRadius: '8px', textAlign: 'center' }}>
-                <span style={{ fontSize: '11px', color: '#685947' }}>Đang xử lý</span>
-                <strong style={{ display: 'block', fontSize: '16px', marginTop: '2px' }}>892 đơn</strong>
-              </div>
-              <div style={{ padding: '12px', background: '#f7f2ea', borderRadius: '8px', textAlign: 'center' }}>
-                <span style={{ fontSize: '11px', color: '#685947' }}>Đã đóng gói</span>
-                <strong style={{ display: 'block', fontSize: '16px', marginTop: '2px' }}>721 đơn</strong>
-              </div>
-              <div style={{ padding: '12px', background: '#f7f2ea', borderRadius: '8px', textAlign: 'center' }}>
-                <span style={{ fontSize: '11px', color: '#685947' }}>Đã gửi hãng</span>
-                <strong style={{ display: 'block', fontSize: '16px', marginTop: '2px' }}>654 đơn</strong>
-              </div>
-              <div style={{ padding: '12px', background: '#f7f2ea', borderRadius: '8px', textAlign: 'center' }}>
-                <span style={{ fontSize: '11px', color: '#25975d' }}>Đã giao thành công</span>
-                <strong style={{ display: 'block', fontSize: '16px', marginTop: '2px', color: '#25975d' }}>602 đơn</strong>
-              </div>
-            </div>
-            <button 
-              type="button" 
-              onClick={() => {
-                navigate('/commerce/fulfillment');
-                setActiveModal(null);
-              }}
-              style={{ width: '100%', padding: '10px', background: '#25211d', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '600', fontSize: '13px' }}
-            >
-              Đi tới trang Quản lý Vận đơn & Đóng gói →
-            </button>
-          </div>
-        )}
-
-        {activeModal?.type === 'channels' && (
-          <div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {[
-                { name: 'Website bán lẻ', share: '42%', revenue: '$28,736', color: '#25975d' },
-                { name: 'Ứng dụng di động (Mobile App)', share: '28%', revenue: '$19,158', color: '#3b82f6' },
-                { name: 'Sàn thương mại điện tử', share: '20%', revenue: '$13,684', color: '#f59e0b' },
-                { name: 'Mạng xã hội (Social Commerce)', share: '10%', revenue: '$6,842', color: '#8b5cf6' }
-              ].map((c, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: '#f7f2ea', borderRadius: '8px', fontSize: '13px' }}>
-                  <strong>{c.name}</strong>
-                  <span style={{ fontWeight: '600', color: c.color }}>{c.share}</span>
-                  <span style={{ color: '#25211d', fontWeight: 'bold' }}>{c.revenue}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {activeModal?.type === 'regions' && (
-          <div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {[
-                { name: 'Bắc Mỹ (Hoa Kỳ, Canada)', share: '38%' },
-                { name: 'Tây Âu (Anh, Pháp, Đức)', share: '24%' },
-                { name: 'Đông Nam Á (Việt Nam, Singapore)', share: '18%' },
-                { name: 'Đông Á (Nhật Bản, Hàn Quốc)', share: '12%' },
-                { name: 'Khu vực khác', share: '8%' }
-              ].map((r, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 14px', background: '#f7f2ea', borderRadius: '8px', fontSize: '13px' }}>
-                  <span>{r.name}</span>
-                  <strong style={{ color: '#b45309' }}>{r.share}</strong>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {activeModal?.type === 'low-stock' && (
-          <div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' }}>
-              {[
-                { name: 'Chuột không dây (Wireless Mouse)', stock: 8, sku: 'WM-008', wh: 'Kho Tây' },
-                { name: 'Túi vải Canvas (Tote Bag)', stock: 12, sku: 'TB-012', wh: 'Kho Đông' },
-                { name: 'Ly sứ tối giản (Ceramic Mug)', stock: 15, sku: 'CM-015', wh: 'Kho Trung tâm' }
-              ].map((p, idx) => (
-                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: '#fff8eb', border: '1px solid #f3deb5', borderRadius: '8px', fontSize: '13px' }}>
-                  <div>
-                    <strong>{p.name}</strong>
-                    <small style={{ display: 'block', color: '#685947' }}>SKU: {p.sku} · {p.wh}</small>
-                  </div>
-                  <span style={{ color: '#b45309', fontWeight: 'bold' }}>Còn {p.stock} chiếc</span>
-                  <button 
-                    type="button" 
-                    onClick={() => showToast(`✓ Đã tạo lệnh nhập thêm 100 chiếc cho ${p.name}`)}
-                    style={{ padding: '6px 12px', background: '#25211d', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}
-                  >
-                    Nhập thêm
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {activeModal?.type === 'payments' && (
-          <div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {[
-                { name: 'Thẻ tín dụng / Ghi nợ (Stripe, Visa/Mastercard)', share: '62%' },
-                { name: 'Ví điện tử Apple Pay & Google Pay', share: '24%' },
-                { name: 'Chuyển khoản trực tiếp (Bank Transfer)', share: '10%' },
-                { name: 'Thanh toán khi nhận hàng (COD)', share: '4%' }
-              ].map((m, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 14px', background: '#f7f2ea', borderRadius: '8px', fontSize: '13px' }}>
-                  <span>{m.name}</span>
-                  <strong>{m.share}</strong>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
+        {/* Modal Chi tiết đơn hàng */}
         {activeModal?.type === 'order' && (
           <div>
             <div style={{ padding: '16px', background: '#f9f5ed', borderRadius: '12px', marginBottom: '14px', fontSize: '13px' }}>
@@ -719,35 +1041,42 @@ export default function PageRenderer() {
           </div>
         )}
 
+        {/* Modal Chi tiết sản phẩm */}
         {activeModal?.type === 'product' && (
           <div>
             <div style={{ padding: '16px', background: '#f9f5ed', borderRadius: '12px', marginBottom: '14px', fontSize: '13px' }}>
               <strong style={{ display: 'block', fontSize: '16px', marginBottom: '10px' }}>{activeModal.data?.id}</strong>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
-                <div><span style={{ color: '#685947' }}>Giá niêm yết:</span> <strong>$24.00</strong></div>
-                <div><span style={{ color: '#685947' }}>Tồn kho:</span> <strong style={{ color: '#25975d' }}>148 chiếc</strong></div>
-                <div><span style={{ color: '#685947' }}>Đã bán:</span> <strong>342 chiếc</strong></div>
-                <div><span style={{ color: '#685947' }}>Trạng thái:</span> <strong style={{ color: '#25975d' }}>Đang bán (Active)</strong></div>
+                <div><span style={{ color: '#685947' }}>Mã SKU:</span> <strong>{activeModal.data?.sku || 'VX-1001'}</strong></div>
+                <div><span style={{ color: '#685947' }}>Giá niêm yết:</span> <strong>$24.00 - $49.00</strong></div>
+                <div><span style={{ color: '#685947' }}>Tồn kho:</span> <strong style={{ color: '#25975d' }}>148 chiếc sẵn sàng</strong></div>
+                <div><span style={{ color: '#685947' }}>Đã bán:</span> <strong>1,284 sản phẩm</strong></div>
+                <div><span style={{ color: '#685947' }}>Doanh số:</span> <strong style={{ color: '#b45309' }}>$30.8K</strong></div>
+                <div><span style={{ color: '#685947' }}>Trạng thái:</span> <strong style={{ color: '#25975d' }}>Đang kinh doanh (Active)</strong></div>
               </div>
               <p style={{ margin: 0, color: '#685947', fontSize: '12px' }}>
-                Chất liệu cao cấp, thoáng mát, gia công tỉ mỉ theo tiêu chuẩn xuất khẩu.
+                Chất liệu cao cấp, mẫu mã chuẩn xu hướng thời trang quốc tế, bảo hành 12 tháng.
               </p>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
               <button 
                 type="button" 
                 onClick={() => {
-                  showToast('✓ Đã cập nhật thông tin sản phẩm thành công!');
-                  setActiveModal(null);
+                  setActiveModal({
+                    type: 'edit-product',
+                    title: `Chỉnh sửa: ${activeModal.data?.id}`,
+                    data: { name: activeModal.data?.id, price: '49.00', stock: '148' }
+                  });
                 }}
                 style={{ padding: '9px 16px', background: '#25211d', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}
               >
-                Cập nhật thông tin
+                Chỉnh sửa sản phẩm
               </button>
             </div>
           </div>
         )}
 
+        {/* Modal Hồ sơ Khách hàng */}
         {activeModal?.type === 'customer' && (
           <div>
             <div style={{ padding: '16px', background: '#f9f5ed', borderRadius: '12px', marginBottom: '14px', fontSize: '13px' }}>
@@ -771,79 +1100,6 @@ export default function PageRenderer() {
             >
               Nhắn tin trực tiếp với khách hàng →
             </button>
-          </div>
-        )}
-
-        {activeModal?.type === 'add-product' && (
-          <div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Tên sản phẩm</label>
-                <input placeholder="VD: Balo chống nước cao cấp..." style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #d4c7b2', fontSize: '13px', outline: 'none' }} />
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Giá bán ($)</label>
-                  <input type="number" placeholder="49.00" style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #d4c7b2', fontSize: '13px', outline: 'none' }} />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Số lượng tồn kho</label>
-                  <input type="number" placeholder="100" style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #d4c7b2', fontSize: '13px', outline: 'none' }} />
-                </div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
-                <button 
-                  type="button" 
-                  onClick={() => setActiveModal(null)}
-                  style={{ padding: '8px 14px', background: 'transparent', border: '1px solid #d4c7b2', borderRadius: '8px', cursor: 'pointer', fontSize: '13px' }}
-                >
-                  Hủy
-                </button>
-                <button 
-                  type="button" 
-                  onClick={() => {
-                    showToast('✓ Đã tạo sản phẩm mới thành công!');
-                    setActiveModal(null);
-                  }}
-                  style={{ padding: '8px 16px', background: '#25211d', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '600', fontSize: '13px' }}
-                >
-                  Lưu sản phẩm
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeModal?.type === 'create-discount' && (
-          <div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Mã giảm giá (Code)</label>
-                <input placeholder="VD: SUMMER2026" style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #d4c7b2', fontSize: '13px', outline: 'none' }} />
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Mức giảm (%)</label>
-                  <input type="number" placeholder="20" style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #d4c7b2', fontSize: '13px', outline: 'none' }} />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Số lần sử dụng</label>
-                  <input type="number" placeholder="500" style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid #d4c7b2', fontSize: '13px', outline: 'none' }} />
-                </div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
-                <button 
-                  type="button" 
-                  onClick={() => {
-                    showToast('✓ Đã kích hoạt mã giảm giá mới!');
-                    setActiveModal(null);
-                  }}
-                  style={{ padding: '8px 16px', background: '#25211d', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '600', fontSize: '13px' }}
-                >
-                  Kích hoạt mã
-                </button>
-              </div>
-            </div>
           </div>
         )}
       </DialogModal>

@@ -1,54 +1,71 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 
 export default function DialogModal({ isOpen, title, children, onClose, wide = false }) {
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if (e.key === 'Escape' && isOpen) {
+        onClose();
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
     <div 
-      className="modal-backdrop" 
+      className="modal-backdrop-overlay" 
       style={{
         position: 'fixed',
-        inset: 0,
-        backgroundColor: 'rgba(32, 26, 18, 0.45)',
-        backdropFilter: 'blur(6px)',
-        zIndex: 9999,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(32, 26, 18, 0.48)',
+        backdropFilter: 'blur(8px)',
+        WebkitBackdropFilter: 'blur(8px)',
+        zIndex: 99999,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: '20px'
+        padding: '16px'
       }}
       onClick={onClose}
     >
-      <dialog 
-        className={`app-dialog ${wide ? 'wide' : ''}`}
-        open 
+      <div 
+        className={`app-dialog ${wide ? 'dialog-wide' : ''}`}
+        role="dialog"
+        aria-modal="true"
         style={{
-          margin: 0,
-          width: '90%',
-          maxWidth: wide ? '720px' : '520px',
-          backgroundColor: '#fffdf9',
-          borderRadius: '20px',
-          boxShadow: '0 24px 48px rgba(0,0,0,0.22)',
-          border: '1px solid #4133211f',
+          position: 'relative',
+          margin: '0 auto',
+          width: wide ? 'min(820px, calc(100vw - 32px))' : 'min(560px, calc(100vw - 32px))',
+          maxHeight: 'min(88vh, 850px)',
+          backgroundColor: '#fcfaf3',
+          borderRadius: '22px',
+          boxShadow: '0 25px 80px rgba(70, 50, 20, 0.38), 0 0 0 1px rgba(255, 255, 255, 0.8)',
+          border: '1.5px solid #ffffff',
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
-          maxHeight: '85vh'
+          color: '#302d24',
+          animation: 'dialog-appear 0.2s cubic-bezier(0.16, 1, 0.3, 1)'
         }}
         onClick={e => e.stopPropagation()}
       >
         <header 
           className="dialog-heading" 
           style={{
-            padding: '16px 22px',
-            borderBottom: '1px solid #41332115',
+            padding: '18px 22px',
+            borderBottom: '1px solid rgba(190, 175, 145, 0.25)',
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            backgroundColor: '#fffcf5'
+            backgroundColor: 'rgba(255, 253, 248, 0.95)'
           }}
         >
-          <h2 style={{ fontSize: '16px', margin: 0, fontWeight: '700', color: '#25211d' }}>
+          <h2 style={{ fontSize: '17px', margin: 0, fontWeight: '750', color: '#302d24', letterSpacing: '-0.3px' }}>
             {title}
           </h2>
           <button 
@@ -58,26 +75,31 @@ export default function DialogModal({ isOpen, title, children, onClose, wide = f
             onClick={onClose}
             style={{
               border: 'none',
-              background: 'transparent',
+              background: 'rgba(235, 225, 210, 0.6)',
               cursor: 'pointer',
-              display: 'flex',
-              padding: '6px',
-              borderRadius: '8px'
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '32px',
+              height: '32px',
+              padding: 0,
+              borderRadius: '9px',
+              color: '#655a47',
+              transition: 'background 0.15s'
             }}
           >
-            <span className="icon" aria-hidden="true">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor" width="20" height="20">
+            <span className="icon" aria-hidden="true" style={{ width: '18px', height: '18px' }}>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor">
                 <path d="M205.66,194.34a8,8,0,0,1-11.32,11.32L128,139.31,61.66,205.66a8,8,0,0,1-11.32-11.32L116.69,128,50.34,61.66A8,8,0,0,1,61.66,50.34L128,116.69l66.34-66.35a8,8,0,0,1,11.32,11.32L139.31,128Z"></path>
               </svg>
             </span>
           </button>
         </header>
 
-        <div className="dialog-body" style={{ padding: '20px 22px', overflowY: 'auto' }}>
+        <div className="dialog-body" style={{ padding: '22px 24px', overflowY: 'auto', flex: 1 }}>
           {children}
         </div>
-      </dialog>
+      </div>
     </div>
   );
 }
-
