@@ -80,3 +80,4 @@ export default function DialogModal({ isOpen, title, children, onClose, wide = f
     </div>
   );
 }
+
