@@ -155,3 +155,4 @@ for (const group of nav) {
 
 fs.writeFileSync('src/data/navigation.json', JSON.stringify(nav, null, 2), 'utf8');
 console.log('Navigation successfully translated to Vietnamese!');
+

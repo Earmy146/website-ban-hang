@@ -94,3 +94,4 @@ for (const [key, page] of Object.entries(pages)) {
 
 fs.writeFileSync('src/data/pages-content.json', JSON.stringify(pages, null, 2), 'utf8');
 console.log(`Successfully translated ${translatedPagesCount} pages in pages-content.json!`);
+
