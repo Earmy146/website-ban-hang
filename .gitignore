@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Production build
+dist/
+dist-ssr/
+*.local
+
+# Heavy crawl capture & temp archives (1.7GB+)
+website-capture/
+captured/
+veylix-rendered.html
+veylix-assets.json
+veylix-failed-requests.json
+capture.cjs
+inspect.cjs
+
+# Screenshot test files
+*.png
+!public/assets/images/**/*.png
+!public/assets/images/*.png
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment
+.env
+.env.development
+.env.production
+.env.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
