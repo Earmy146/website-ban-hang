@@ -8,3 +8,4 @@ import PageRenderer from '../../PageRenderer';
 export default function CustomersPage() {
   return <PageRenderer fixedPath="/commerce/customers" />;
 }
+

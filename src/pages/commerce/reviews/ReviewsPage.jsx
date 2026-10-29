@@ -8,3 +8,4 @@ import PageRenderer from '../../PageRenderer';
 export default function ReviewsPage() {
   return <PageRenderer fixedPath="/commerce/reviews" />;
 }
+

@@ -7,3 +7,4 @@ import PageRenderer from '../PageRenderer';
 export default function DynamicPage() {
   return <PageRenderer />;
 }
+

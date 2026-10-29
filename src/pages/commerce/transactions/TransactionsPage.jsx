@@ -8,3 +8,4 @@ import PageRenderer from '../../PageRenderer';
 export default function TransactionsPage() {
   return <PageRenderer fixedPath="/commerce/transactions" />;
 }
+

@@ -8,3 +8,4 @@ import PageRenderer from '../../PageRenderer';
 export default function GeneralSettingsPage() {
   return <PageRenderer fixedPath="/commerce/settings-general" />;
 }
+

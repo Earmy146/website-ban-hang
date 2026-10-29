@@ -8,3 +8,4 @@ import PageRenderer from '../../PageRenderer';
 export default function StockPage() {
   return <PageRenderer fixedPath="/commerce/stock" />;
 }
+

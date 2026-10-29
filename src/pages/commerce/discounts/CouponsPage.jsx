@@ -8,3 +8,4 @@ import PageRenderer from '../../PageRenderer';
 export default function CouponsPage() {
   return <PageRenderer fixedPath="/commerce/coupons" />;
 }
+
