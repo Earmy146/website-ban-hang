@@ -3,12 +3,12 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import pagesContent from '../data/pages-content.json';
 import DialogModal from '../components/ui/DialogModal';
 
-export default function PageRenderer() {
+export default function PageRenderer({ fixedPath }) {
   const location = useLocation();
   const navigate = useNavigate();
   const containerRef = useRef(null);
 
-  let path = location.pathname;
+  let path = fixedPath || location.pathname;
   if (path === '/') path = '/overview';
 
   const pageData = pagesContent[path] || pagesContent['/overview'];
