@@ -144,3 +144,4 @@ export const initialStock = [
     retailPrice: 85.00
   }
 ];
+

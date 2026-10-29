@@ -48,3 +48,4 @@ export default function StockHeading({ onExport, onTransfer, onReceiveStock }) {
     </header>
   );
 }
+
