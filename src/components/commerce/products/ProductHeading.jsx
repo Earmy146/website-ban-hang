@@ -48,3 +48,4 @@ export default function ProductHeading({ onImport, onExport, onAddProduct }) {
     </header>
   );
 }
+
