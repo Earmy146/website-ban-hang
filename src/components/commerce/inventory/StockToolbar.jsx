@@ -37,6 +37,8 @@ export default function StockToolbar({
             <option value="Balo & Túi xách">Balo & Túi xách</option>
             <option value="Đồ gia dụng & Nội thất">Đồ gia dụng & Nội thất</option>
             <option value="Thiết bị công nghệ">Thiết bị công nghệ</option>
+            <option value="Phụ kiện thời trang">Phụ kiện thời trang</option>
+            <option value="Văn phòng phẩm">Văn phòng phẩm</option>
           </select>
         </label>
       </div>

@@ -1,32 +1,53 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import StockHeading from '../../../components/commerce/inventory/StockHeading';
 import StockSummaryCards from '../../../components/commerce/inventory/StockSummaryCards';
 import StockToolbar from '../../../components/commerce/inventory/StockToolbar';
 import StockTable from '../../../components/commerce/inventory/StockTable';
 import DialogModal from '../../../components/ui/DialogModal';
 import { initialStock } from '../../../data/mockStock';
+import api from '../../../services/api';
 
 export default function StockPage() {
+  const [searchParams] = useSearchParams();
   const [stock, setStock] = useState(initialStock);
   const [selectedIds, setSelectedIds] = useState([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Bộ lọc
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState(() => searchParams.get('status') || 'all');
   const [categoryFilter, setCategoryFilter] = useState('all');
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState(() => searchParams.get('search') || '');
 
   // Modals
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
-  const [isReceiveModalOpen, setIsReceiveModalOpen] = useState(false);
+  const [isBulkTransferModalOpen, setIsBulkTransferModalOpen] = useState(false);
+  const [isReceiveModalOpen, setIsReceiveModalOpen] = useState(() => searchParams.get('action') === 'receive');
+
+  useEffect(() => {
+    if (searchParams.get('action') === 'receive') {
+      setIsReceiveModalOpen(true);
+    }
+    if (searchParams.get('status')) {
+      setStatusFilter(searchParams.get('status'));
+    }
+  }, [searchParams]);
   const [viewingItem, setViewingItem] = useState(null);
   const [adjustingItem, setAdjustingItem] = useState(null);
 
-  // Form Chuyển kho
+  // Form Chuyển kho đơn lẻ
   const [transferData, setTransferData] = useState({
     sku: 'VX-1001',
     fromLoc: 'NY',
     toLoc: 'CA',
     quantity: 10
+  });
+
+  // Form Chuyển kho hàng loạt
+  const [bulkTransferForm, setBulkTransferForm] = useState({
+    fromLoc: 'NY',
+    toLoc: 'CA',
+    quantity: 5
   });
 
   // Form Nhập thêm hàng
@@ -38,13 +59,32 @@ export default function StockPage() {
 
   // Toasts
   const [toasts, setToasts] = useState([]);
-  const showToast = (message, type = 'success') => {
+  const showToast = useCallback((message, type = 'success') => {
     const id = Date.now() + Math.random();
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 3200);
-  };
+  }, []);
+
+  const loadStock = useCallback(async () => {
+    try {
+      const data = await api.getStock();
+      if (Array.isArray(data)) {
+        setStock(data);
+        if (data.length > 0) {
+          setTransferData(prev => data.some(s => s.sku === prev.sku) ? prev : { ...prev, sku: data[0].sku });
+          setReceiveData(prev => data.some(s => s.sku === prev.sku) ? prev : { ...prev, sku: data[0].sku });
+        }
+      }
+    } catch (err) {
+      showToast(err.message || 'Không thể tải dữ liệu tồn kho', 'error');
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    loadStock();
+  }, [loadStock]);
 
   // Lọc realtime
   const filteredStock = useMemo(() => {
@@ -53,14 +93,18 @@ export default function StockPage() {
       if (categoryFilter !== 'all' && s.category !== categoryFilter) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchName = s.name.toLowerCase().includes(q);
-        const matchSku = s.sku.toLowerCase().includes(q);
-        const matchCat = s.category.toLowerCase().includes(q);
+        const matchName = (s.name || '').toLowerCase().includes(q);
+        const matchSku = (s.sku || '').toLowerCase().includes(q);
+        const matchCat = (s.category || '').toLowerCase().includes(q);
         if (!matchName && !matchSku && !matchCat) return false;
       }
       return true;
     });
   }, [stock, statusFilter, categoryFilter, searchQuery]);
+
+  const selectedStockItems = useMemo(() => {
+    return stock.filter(s => selectedIds.includes(s.id));
+  }, [stock, selectedIds]);
 
   // Checkbox handlers
   const handleToggleSelect = (id) => {
@@ -82,8 +126,46 @@ export default function StockPage() {
   };
 
   const handleBulkTransfer = () => {
-    showToast(`Đã mở lệnh điều chuyển kho cho ${selectedIds.length} mặt hàng!`);
-    setSelectedIds([]);
+    if (selectedIds.length === 0) return;
+    setIsBulkTransferModalOpen(true);
+  };
+
+  const handleExecuteBulkTransfer = async (e) => {
+    e.preventDefault();
+    if (isSubmitting || selectedStockItems.length === 0) return;
+    const qty = parseInt(bulkTransferForm.quantity, 10) || 0;
+    if (qty <= 0) {
+      showToast('Số lượng điều chuyển phải lớn hơn 0!', 'error');
+      return;
+    }
+    if (bulkTransferForm.fromLoc === bulkTransferForm.toLoc) {
+      showToast('Kho xuất và kho nhận không được trùng nhau!', 'error');
+      return;
+    }
+
+    const skus = selectedStockItems.map(s => s.sku);
+    setIsSubmitting(true);
+    try {
+      const updatedList = await api.bulkTransferStock({
+        skus,
+        fromLoc: bulkTransferForm.fromLoc,
+        toLoc: bulkTransferForm.toLoc,
+        quantity: qty,
+      });
+      if (Array.isArray(updatedList)) {
+        const bySku = new Map(updatedList.map(item => [item.sku, item]));
+        setStock(prev => prev.map(s => bySku.get(s.sku) || s));
+      } else {
+        await loadStock();
+      }
+      setIsBulkTransferModalOpen(false);
+      setSelectedIds([]);
+      showToast(`Đã điều chuyển hàng loạt ${qty} đơn vị/mã cho ${skus.length} SKU từ kho ${bulkTransferForm.fromLoc} sang ${bulkTransferForm.toLoc}!`);
+    } catch (err) {
+      showToast(err.message || 'Lỗi khi chuyển kho hàng loạt', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Xuất file CSV
@@ -115,9 +197,10 @@ export default function StockPage() {
     showToast('Đã xuất file dữ liệu tồn kho thành công!');
   };
 
-  // Thực hiện chuyển kho
-  const handleExecuteTransfer = (e) => {
+  // Thực hiện chuyển kho đơn lẻ
+  const handleExecuteTransfer = async (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
     const qty = parseInt(transferData.quantity, 10) || 0;
     if (qty <= 0) {
       showToast('Số lượng điều chuyển phải lớn hơn 0!', 'error');
@@ -128,65 +211,82 @@ export default function StockPage() {
       return;
     }
 
-    setStock(prev => prev.map(s => {
-      if (s.sku === transferData.sku) {
-        const fromKey = transferData.fromLoc === 'NY' ? 'locationNY' : transferData.fromLoc === 'CA' ? 'locationCA' : 'locationTX';
-        const toKey = transferData.toLoc === 'NY' ? 'locationNY' : transferData.toLoc === 'CA' ? 'locationCA' : 'locationTX';
-        return {
-          ...s,
-          [fromKey]: Math.max(0, s[fromKey] - qty),
-          [toKey]: s[toKey] + qty
-        };
+    setIsSubmitting(true);
+    try {
+      const updated = await api.transferStock({
+        sku: transferData.sku,
+        fromLoc: transferData.fromLoc,
+        toLoc: transferData.toLoc,
+        quantity: qty
+      });
+      if (updated && updated.sku) {
+        setStock(prev => prev.map(s => (s.sku === updated.sku ? updated : s)));
+      } else {
+        await loadStock();
       }
-      return s;
-    }));
-
-    setIsTransferModalOpen(false);
-    showToast(`Đã điều chuyển ${qty} đơn vị SKU ${transferData.sku} từ kho ${transferData.fromLoc} sang kho ${transferData.toLoc}!`);
+      setIsTransferModalOpen(false);
+      showToast(`Đã điều chuyển ${qty} đơn vị SKU ${transferData.sku} từ kho ${transferData.fromLoc} sang kho ${transferData.toLoc}!`);
+    } catch (err) {
+      showToast(err.message || 'Lỗi khi thực hiện chuyển kho', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Thực hiện nhập thêm hàng
-  const handleExecuteReceive = (e) => {
+  const handleExecuteReceive = async (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
     const qty = parseInt(receiveData.quantity, 10) || 0;
     if (qty <= 0) {
       showToast('Số lượng nhập hàng phải lớn hơn 0!', 'error');
       return;
     }
 
-    setStock(prev => prev.map(s => {
-      if (s.sku === receiveData.sku) {
-        const locKey = receiveData.targetLoc === 'NY' ? 'locationNY' : receiveData.targetLoc === 'CA' ? 'locationCA' : 'locationTX';
-        const newOnHand = s.onHand + qty;
-        const newAvailable = s.available + qty;
-        return {
-          ...s,
-          onHand: newOnHand,
-          available: newAvailable,
-          [locKey]: s[locKey] + qty,
-          status: newAvailable > s.reorderPoint ? 'Healthy' : 'Low'
-        };
+    setIsSubmitting(true);
+    try {
+      const updated = await api.receiveStock({
+        sku: receiveData.sku,
+        targetLoc: receiveData.targetLoc,
+        quantity: qty
+      });
+      if (updated && updated.sku) {
+        setStock(prev => prev.map(s => (s.sku === updated.sku ? updated : s)));
+      } else {
+        await loadStock();
       }
-      return s;
-    }));
-
-    setIsReceiveModalOpen(false);
-    showToast(`Đã nhập thêm ${qty} đơn vị SKU ${receiveData.sku} vào kho ${receiveData.targetLoc}!`);
+      setIsReceiveModalOpen(false);
+      showToast(`Đã nhập thêm ${qty} đơn vị SKU ${receiveData.sku} vào kho ${receiveData.targetLoc}!`);
+    } catch (err) {
+      showToast(err.message || 'Lỗi khi nhập thêm hàng vào kho', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Lưu điều chỉnh số lượng
-  const handleSaveAdjust = (e) => {
+  const handleSaveAdjust = async (e) => {
     e.preventDefault();
-    if (!adjustingItem) return;
-    const newAvail = Math.max(0, adjustingItem.onHand - adjustingItem.committed);
-    const updated = {
-      ...adjustingItem,
-      available: newAvail,
-      status: newAvail === 0 ? 'Out' : newAvail <= adjustingItem.reorderPoint ? 'Low' : 'Healthy'
-    };
-    setStock(prev => prev.map(s => s.id === updated.id ? updated : s));
-    setAdjustingItem(null);
-    showToast(`Đã điều chỉnh tồn kho cho ${updated.name}!`);
+    if (!adjustingItem || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const updated = await api.adjustStock(adjustingItem.id, {
+        onHand: Number(adjustingItem.onHand) || 0,
+        reorderPoint: Number(adjustingItem.reorderPoint) || 0
+      });
+      if (updated && updated.id) {
+        setStock(prev => prev.map(s => (s.id === updated.id ? updated : s)));
+      } else {
+        await loadStock();
+      }
+      const targetName = adjustingItem.name;
+      setAdjustingItem(null);
+      showToast(`Đã điều chỉnh tồn kho cho ${targetName}!`);
+    } catch (err) {
+      showToast(err.message || 'Lỗi khi điều chỉnh tồn kho', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -223,7 +323,7 @@ export default function StockPage() {
         }}
       />
 
-      {/* Modal: Chuyển kho */}
+      {/* Modal: Chuyển kho đơn lẻ */}
       <DialogModal 
         isOpen={isTransferModalOpen} 
         onClose={() => setIsTransferModalOpen(false)}
@@ -304,8 +404,87 @@ export default function StockPage() {
             >
               Hủy
             </button>
-            <button type="submit" className="primary-button">
-              Xác nhận chuyển kho
+            <button type="submit" className="primary-button" disabled={isSubmitting}>
+              {isSubmitting ? 'Đang xử lý...' : 'Xác nhận chuyển kho'}
+            </button>
+          </div>
+        </form>
+      </DialogModal>
+
+      {/* Modal: Chuyển kho hàng loạt */}
+      <DialogModal
+        isOpen={isBulkTransferModalOpen}
+        onClose={() => setIsBulkTransferModalOpen(false)}
+        title={`Chuyển kho hàng loạt (${selectedStockItems.length} mã SKU)`}
+      >
+        <form onSubmit={handleExecuteBulkTransfer} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div>
+            <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '600' }}>
+              Danh sách mặt hàng được chọn
+            </label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '10px', background: '#faf6ee', borderRadius: '8px', maxHeight: '110px', overflowY: 'auto' }}>
+              {selectedStockItems.map(item => (
+                <span key={item.id} style={{ fontSize: '12px', padding: '4px 8px', background: '#fff', border: '1px solid #e2d5c1', borderRadius: '6px' }}>
+                  <strong>{item.sku}</strong> · {item.name} (NY:{item.locationNY} | CA:{item.locationCA} | TX:{item.locationTX})
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '600' }}>
+                Kho xuất hàng loạt
+              </label>
+              <select
+                className="c-field"
+                style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
+                value={bulkTransferForm.fromLoc}
+                onChange={e => setBulkTransferForm({ ...bulkTransferForm, fromLoc: e.target.value })}
+              >
+                <option value="NY">Kho Miền Bắc (NY)</option>
+                <option value="CA">Kho Miền Trung (CA)</option>
+                <option value="TX">Kho Miền Nam (TX)</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '600' }}>
+                Kho nhận hàng loạt
+              </label>
+              <select
+                className="c-field"
+                style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
+                value={bulkTransferForm.toLoc}
+                onChange={e => setBulkTransferForm({ ...bulkTransferForm, toLoc: e.target.value })}
+              >
+                <option value="CA">Kho Miền Trung (CA)</option>
+                <option value="NY">Kho Miền Bắc (NY)</option>
+                <option value="TX">Kho Miền Nam (TX)</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '600' }}>
+              Số lượng điều chuyển trên mỗi SKU *
+            </label>
+            <input
+              type="number"
+              required
+              min="1"
+              className="c-field"
+              style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
+              value={bulkTransferForm.quantity}
+              onChange={e => setBulkTransferForm({ ...bulkTransferForm, quantity: e.target.value })}
+            />
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
+            <button type="button" className="secondary-button" onClick={() => setIsBulkTransferModalOpen(false)}>
+              Hủy
+            </button>
+            <button type="submit" className="primary-button" disabled={isSubmitting}>
+              {isSubmitting ? 'Đang điều chuyển...' : `Xác nhận chuyển ${selectedStockItems.length} SKU`}
             </button>
           </div>
         </form>
@@ -376,8 +555,8 @@ export default function StockPage() {
             >
               Hủy
             </button>
-            <button type="submit" className="primary-button">
-              Lưu phiếu nhập kho
+            <button type="submit" className="primary-button" disabled={isSubmitting}>
+              {isSubmitting ? 'Đang lưu...' : 'Lưu phiếu nhập kho'}
             </button>
           </div>
         </form>
@@ -504,8 +683,8 @@ export default function StockPage() {
               >
                 Hủy
               </button>
-              <button type="submit" className="primary-button">
-                Lưu số lượng mới
+              <button type="submit" className="primary-button" disabled={isSubmitting}>
+                {isSubmitting ? 'Đang lưu...' : 'Lưu số lượng mới'}
               </button>
             </div>
           </form>

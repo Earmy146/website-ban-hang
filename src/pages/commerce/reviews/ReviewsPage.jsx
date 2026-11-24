@@ -1,65 +1,172 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import DialogModal from '../../../components/ui/DialogModal';
 import { initialReviews } from '../../../data/mockReviews';
+import api from '../../../services/api';
 
 export default function ReviewsPage() {
   const [reviews, setReviews] = useState(initialReviews);
   const [ratingFilter, setRatingFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isGeneratingAi, setIsGeneratingAi] = useState(false);
 
   // Modals
   const [replyingReview, setReplyingReview] = useState(null);
   const [replyText, setReplyText] = useState('');
-  const [viewingReview, setViewingReview] = useState(null);
+  const [deletingReview, setDeletingReview] = useState(null);
 
   // Toasts
   const [toasts, setToasts] = useState([]);
-  const showToast = (message, type = 'success') => {
+  const showToast = useCallback((message, type = 'success') => {
     const id = Date.now() + Math.random();
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 3200);
-  };
+  }, []);
+
+  const loadReviews = useCallback(async () => {
+    try {
+      const data = await api.getReviews();
+      if (Array.isArray(data)) {
+        setReviews(data);
+      }
+    } catch (err) {
+      showToast(err.message || 'Không thể tải danh sách đánh giá', 'error');
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    loadReviews();
+  }, [loadReviews]);
+
+  // Thống kê điểm trung bình & phân bố 5★ -> 1★
+  const ratingStats = useMemo(() => {
+    const total = reviews.length;
+    const sum = reviews.reduce((s, r) => s + (Number(r.rating) || 5), 0);
+    const avg = total > 0 ? (sum / total).toFixed(1) : '5.0';
+    const verifiedCount = reviews.filter(r => r.verified !== false).length;
+    const repliedCount = reviews.filter(r => Boolean(r.response && String(r.response).trim())).length;
+
+    const buckets = [5, 4, 3, 2, 1].map(star => {
+      const count = reviews.filter(r => Math.round(Number(r.rating) || 5) === star).length;
+      const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+      return { star, count, pct };
+    });
+
+    return { total, avg, verifiedCount, repliedCount, buckets };
+  }, [reviews]);
 
   // Lọc
   const filteredReviews = useMemo(() => {
     return reviews.filter(r => {
-      if (ratingFilter !== 'all' && r.rating !== parseInt(ratingFilter, 10)) return false;
+      if (ratingFilter !== 'all' && Math.round(Number(r.rating)) !== parseInt(ratingFilter, 10)) return false;
       if (statusFilter !== 'all' && r.status !== statusFilter) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchCust = r.customerName.toLowerCase().includes(q);
-        const matchProd = r.productName.toLowerCase().includes(q);
-        const matchText = r.comment.toLowerCase().includes(q) || r.title.toLowerCase().includes(q);
+        const matchCust = (r.customerName || '').toLowerCase().includes(q);
+        const matchProd = (r.productName || '').toLowerCase().includes(q);
+        const matchText = (r.comment || '').toLowerCase().includes(q) || (r.title || '').toLowerCase().includes(q);
         if (!matchCust && !matchProd && !matchText) return false;
       }
       return true;
     });
   }, [reviews, ratingFilter, statusFilter, searchQuery]);
 
-  // Duyệt đánh giá
-  const handleApprove = (id) => {
-    setReviews(prev => prev.map(r => r.id === id ? { ...r, status: 'Published' } : r));
-    showToast('Đã phê duyệt công khai đánh giá!');
+  // Đổi trạng thái duyệt / ẩn đánh giá
+  const handleStatusChange = async (id, nextStatus, successMsg) => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const updated = await api.updateReviewStatus(id, nextStatus);
+      if (updated && updated.id) {
+        setReviews(prev => prev.map(r => (r.id === id ? updated : r)));
+      } else {
+        setReviews(prev => prev.map(r => (r.id === id ? { ...r, status: nextStatus } : r)));
+      }
+      showToast(successMsg);
+    } catch (err) {
+      showToast(err.message || 'Không thể cập nhật trạng thái đánh giá', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  // Ẩn đánh giá
-  const handleHide = (id) => {
-    setReviews(prev => prev.map(r => r.id === id ? { ...r, status: 'Flagged' } : r));
-    showToast('Đã chuyển đánh giá vào danh sách xem xét/ẩn!');
+  // Gợi ý phản hồi bằng AI
+  const handleGenerateAiReply = async () => {
+    if (!replyingReview || isGeneratingAi) return;
+    setIsGeneratingAi(true);
+    try {
+      const res = await api.generateAiContent({
+        type: 'reply',
+        productName: replyingReview.productName,
+        prompt: `Khách hàng ${replyingReview.customerName} đánh giá ${replyingReview.rating} sao cho sản phẩm "${replyingReview.productName}": "${replyingReview.title} - ${replyingReview.comment}". Hãy viết lời phản hồi chân thành, chuyên nghiệp từ cửa hàng Veylix.`,
+        tone: 'tận tâm, lịch sự'
+      });
+      const text = typeof res === 'string'
+        ? res
+        : (res?.content || res?.output || res?.text || res?.result || '');
+
+      if (text && String(text).trim()) {
+        setReplyText(String(text).trim());
+      } else {
+        setReplyText(
+          `Chào ${replyingReview.customerName}, cảm ơn bạn đã tin chọn sản phẩm "${replyingReview.productName}" tại Veylix! Đội ngũ rất trân trọng chia sẻ của bạn và luôn sẵn sàng hỗ trợ bạn trong suốt quá trình sử dụng.`
+        );
+      }
+      showToast('✨ Đã tạo nội dung gợi ý phản hồi bằng AI!');
+    } catch {
+      setReplyText(
+        `Chào ${replyingReview.customerName}, cảm ơn bạn đã dành thời gian đánh giá "${replyingReview.productName}". Veylix rất trân trọng góp ý của bạn và mong tiếp tục được phục vụ bạn trong các đơn hàng tới!`
+      );
+      showToast('✨ Đã điền mẫu phản hồi chăm sóc khách hàng!');
+    } finally {
+      setIsGeneratingAi(false);
+    }
   };
 
   // Gửi phản hồi
-  const handleSendReply = (e) => {
+  const handleSendReply = async (e) => {
     e.preventDefault();
-    if (!replyText.trim() || !replyingReview) return;
-    setReviews(prev => prev.map(r => r.id === replyingReview.id ? { ...r, response: replyText.trim() } : r));
-    setReplyingReview(null);
-    setReplyText('');
-    showToast(`Đã gửi phản hồi cho khách hàng ${replyingReview.customerName}!`);
+    if (!replyText.trim() || !replyingReview || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const targetId = replyingReview.id;
+      const targetCustomer = replyingReview.customerName;
+      const updated = await api.replyReview(targetId, replyText.trim());
+      if (updated && updated.id) {
+        setReviews(prev => prev.map(r => (r.id === targetId ? updated : r)));
+      } else {
+        setReviews(prev => prev.map(r => (r.id === targetId ? { ...r, response: replyText.trim() } : r)));
+      }
+      setReplyingReview(null);
+      setReplyText('');
+      showToast(`Đã gửi phản hồi cho khách hàng ${targetCustomer}!`);
+    } catch (err) {
+      showToast(err.message || 'Không thể gửi phản hồi đánh giá', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Xóa đánh giá spam / vi phạm
+  const handleConfirmDelete = async () => {
+    if (!deletingReview || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const targetId = deletingReview.id;
+      const targetCust = deletingReview.customerName;
+      await api.deleteReview(targetId);
+      setReviews(prev => prev.filter(r => r.id !== targetId));
+      setDeletingReview(null);
+      showToast(`✓ Đã xóa đánh giá của "${targetCust}" và cập nhật điểm sản phẩm!`);
+    } catch (err) {
+      showToast(err.message || 'Không thể xóa đánh giá này', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Xuất file CSV
@@ -115,6 +222,87 @@ export default function ReviewsPage() {
         </div>
       </header>
 
+      {/* Khối Tổng quan Điểm trung bình & Thanh phân bố 5★ -> 1★ (bấm lọc ngay) */}
+      <section
+        className="glass-card"
+        aria-label="Tổng quan điểm xếp hạng"
+        style={{
+          padding: '20px 24px',
+          marginBottom: '16px',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+          gap: '24px',
+          alignItems: 'center'
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '18px' }}>
+          <div style={{ textAlign: 'center', padding: '14px 20px', background: '#fff8e8', borderRadius: '16px', border: '1px solid #ead8b8' }}>
+            <strong style={{ fontSize: '32px', fontWeight: '800', color: '#2b2316', lineHeight: 1.1, display: 'block' }}>
+              {ratingStats.avg} <span style={{ fontSize: '18px', color: '#d97706' }}>/ 5.0 ★</span>
+            </strong>
+            <small style={{ color: '#776c5b', fontWeight: '600' }}>{ratingStats.total} lượt đánh giá</small>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '13px', color: '#5c5243' }}>
+            <div>✓ Đã xác thực mua hàng: <strong>{ratingStats.verifiedCount}/{ratingStats.total}</strong></div>
+            <div>💬 Đã phản hồi khách: <strong>{ratingStats.repliedCount}/{ratingStats.total}</strong></div>
+            <small style={{ color: '#885600', fontWeight: '600' }}>Bấm vào từng mức sao bên phải để lọc nhanh</small>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
+          {ratingStats.buckets.map(b => {
+            const isSelected = String(ratingFilter) === String(b.star);
+            return (
+              <button
+                key={b.star}
+                type="button"
+                onClick={() => setRatingFilter(prev => (String(prev) === String(b.star) ? 'all' : String(b.star)))}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '54px 1fr 68px',
+                  alignItems: 'center',
+                  gap: '10px',
+                  padding: '5px 10px',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  background: isSelected ? '#fff3d6' : 'rgba(255,255,255,0.55)',
+                  border: isSelected ? '1.5px solid #c98a1e' : '1px solid transparent',
+                  textAlign: 'left'
+                }}
+                title={`Lọc các đánh giá ${b.star} sao`}
+              >
+                <strong style={{ fontSize: '12.5px', color: '#885600' }}>{b.star} ★</strong>
+                <div style={{ width: '100%', height: '8px', background: '#eadfce', borderRadius: '4px', overflow: 'hidden' }}>
+                  <div
+                    style={{
+                      width: `${b.pct}%`,
+                      height: '100%',
+                      background: b.star >= 4 ? '#10b981' : b.star === 3 ? '#f59e0b' : '#ef4444',
+                      borderRadius: '4px'
+                    }}
+                  />
+                </div>
+                <small style={{ textAlign: 'right', fontWeight: '600', color: '#4d4335' }}>
+                  {b.count} ({b.pct}%)
+                </small>
+              </button>
+            );
+          })}
+          {ratingFilter !== 'all' && (
+            <div style={{ textAlign: 'right', marginTop: '2px' }}>
+              <button
+                type="button"
+                className="secondary-button"
+                style={{ padding: '3px 10px', fontSize: '12px' }}
+                onClick={() => setRatingFilter('all')}
+              >
+                ✕ Xem tất cả mức sao ({reviews.length})
+              </button>
+            </div>
+          )}
+        </div>
+      </section>
+
       {/* Toolbar */}
       <section className="glass-card c-toolbar">
         <div className="c-toolbar-filters">
@@ -129,6 +317,8 @@ export default function ReviewsPage() {
               <option value="5">⭐⭐⭐⭐⭐ (5 sao)</option>
               <option value="4">⭐⭐⭐⭐ (4 sao)</option>
               <option value="3">⭐⭐⭐ (3 sao)</option>
+              <option value="2">⭐⭐ (2 sao)</option>
+              <option value="1">⭐ (1 sao)</option>
             </select>
           </label>
 
@@ -172,87 +362,106 @@ export default function ReviewsPage() {
             Không tìm thấy đánh giá nào phù hợp với bộ lọc hiện tại.
           </div>
         ) : (
-          filteredReviews.map(r => (
-            <div 
-              key={r.id} 
-              className="glass-card" 
-              style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '12px' }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '10px' }}>
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ color: '#d97706', fontSize: '15px' }}>
-                      {'★'.repeat(r.rating)}{'☆'.repeat(5 - r.rating)}
-                    </span>
-                    <strong style={{ fontSize: '16px', color: '#271f14' }}>{r.title}</strong>
+          filteredReviews.map(r => {
+            const stars = Math.min(5, Math.max(1, Number(r.rating) || 5));
+            return (
+              <div 
+                key={r.id} 
+                className="glass-card" 
+                style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '12px' }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '10px' }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <span style={{ color: '#d97706', fontSize: '15px' }}>
+                        {'★'.repeat(stars)}{'☆'.repeat(5 - stars)}
+                      </span>
+                      <strong style={{ fontSize: '16px', color: '#271f14' }}>{r.title}</strong>
+                      {r.verified !== false && (
+                        <span className="badge badge-green" style={{ fontSize: '11px', padding: '2px 7px' }}>
+                          ✓ Đã mua hàng
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#7a7061', marginTop: '4px' }}>
+                      Bởi <strong>{r.customerName}</strong> cho sản phẩm <strong style={{ color: '#885600' }}>{r.productName}</strong> · {r.date}
+                    </div>
                   </div>
-                  <div style={{ fontSize: '13px', color: '#7a7061', marginTop: '4px' }}>
-                    Bởi <strong>{r.customerName}</strong> cho sản phẩm <strong style={{ color: '#885600' }}>{r.productName}</strong> · {r.date}
-                  </div>
-                </div>
 
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <span 
-                    className={`badge badge-${r.status === 'Published' ? 'green' : r.status === 'Pending' ? 'amber' : 'red'}`}
-                    style={{ fontSize: '12px', padding: '4px 10px', borderRadius: '6px' }}
-                  >
-                    {r.status === 'Published' ? 'Đã duyệt' : r.status === 'Pending' ? 'Chờ duyệt' : 'Đã ẩn'}
-                  </span>
-
-                  {r.status === 'Pending' && (
-                    <button 
-                      type="button" 
-                      className="primary-button" 
-                      style={{ padding: '4px 12px', fontSize: '12px' }}
-                      onClick={() => handleApprove(r.id)}
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span 
+                      className={`badge badge-${r.status === 'Published' ? 'green' : r.status === 'Pending' ? 'amber' : 'red'}`}
+                      style={{ fontSize: '12px', padding: '4px 10px', borderRadius: '6px' }}
                     >
-                      Duyệt ngay
-                    </button>
-                  )}
+                      {r.status === 'Published' ? 'Đã duyệt' : r.status === 'Pending' ? 'Chờ duyệt' : 'Đã ẩn'}
+                    </span>
 
-                  {r.status === 'Published' && (
+                    {(r.status === 'Pending' || r.status === 'Flagged') && (
+                      <button 
+                        type="button" 
+                        className="primary-button" 
+                        disabled={isSubmitting}
+                        style={{ padding: '4px 12px', fontSize: '12px' }}
+                        onClick={() => handleStatusChange(r.id, 'Published', 'Đã phê duyệt công khai đánh giá!')}
+                      >
+                        Duyệt ngay
+                      </button>
+                    )}
+
+                    {r.status === 'Published' && (
+                      <button 
+                        type="button" 
+                        className="secondary-button" 
+                        disabled={isSubmitting}
+                        style={{ padding: '4px 12px', fontSize: '12px' }}
+                        onClick={() => handleStatusChange(r.id, 'Flagged', 'Đã chuyển đánh giá vào danh sách xem xét/ẩn!')}
+                      >
+                        Ẩn đánh giá
+                      </button>
+                    )}
+
                     <button 
                       type="button" 
                       className="secondary-button" 
                       style={{ padding: '4px 12px', fontSize: '12px' }}
-                      onClick={() => handleHide(r.id)}
+                      onClick={() => {
+                        setReplyingReview(r);
+                        setReplyText(r.response || '');
+                      }}
                     >
-                      Ẩn đánh giá
+                      {r.response ? 'Sửa phản hồi' : 'Trả lời'}
                     </button>
-                  )}
 
-                  <button 
-                    type="button" 
-                    className="secondary-button" 
-                    style={{ padding: '4px 12px', fontSize: '12px' }}
-                    onClick={() => {
-                      setReplyingReview(r);
-                      setReplyText(r.response || '');
-                    }}
-                  >
-                    {r.response ? 'Sửa phản hồi' : 'Trả lời'}
-                  </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      style={{ padding: '4px 10px', fontSize: '12px', color: '#b23b3b' }}
+                      onClick={() => setDeletingReview(r)}
+                    >
+                      Xóa
+                    </button>
+                  </div>
                 </div>
+
+                <p style={{ margin: '4px 0', fontSize: '14px', lineHeight: '1.6', color: '#443c2f' }}>
+                  "{r.comment}"
+                </p>
+
+                {r.response && (
+                  <div style={{ background: '#f5efe4', padding: '12px 16px', borderRadius: '10px', borderLeft: '4px solid #bda688', marginTop: '4px' }}>
+                    <small style={{ fontWeight: '700', color: '#685e50', display: 'block', marginBottom: '2px' }}>
+                      Phản hồi từ cửa hàng Veylix:
+                    </small>
+                    <p style={{ margin: 0, fontSize: '13px', color: '#3d3527' }}>{r.response}</p>
+                  </div>
+                )}
               </div>
-
-              <p style={{ margin: '4px 0', fontSize: '14px', lineHeight: '1.6', color: '#443c2f' }}>
-                "{r.comment}"
-              </p>
-
-              {r.response && (
-                <div style={{ background: '#f5efe4', padding: '12px 16px', borderRadius: '10px', borderLeft: '4px solid #bda688', marginTop: '4px' }}>
-                  <small style={{ fontWeight: '700', color: '#685e50', display: 'block', marginBottom: '2px' }}>
-                    Phản hồi từ cửa hàng Veylix:
-                  </small>
-                  <p style={{ margin: 0, fontSize: '13px', color: '#3d3527' }}>{r.response}</p>
-                </div>
-              )}
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 
-      {/* Modal: Phản hồi khách hàng */}
+      {/* Modal: Phản hồi khách hàng (kèm Gợi ý phản hồi bằng AI) */}
       <DialogModal
         isOpen={Boolean(replyingReview)}
         onClose={() => setReplyingReview(null)}
@@ -260,13 +469,26 @@ export default function ReviewsPage() {
       >
         {replyingReview && (
           <form onSubmit={handleSendReply} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <p style={{ fontSize: '13px', color: '#665c4e', margin: 0 }}>
-              Đánh giá về sản phẩm: <strong>{replyingReview.productName}</strong>
-            </p>
+            <div style={{ padding: '10px 14px', background: '#faf6ee', borderRadius: '10px', fontSize: '13px', color: '#5c5243' }}>
+              <div><strong>Sản phẩm:</strong> {replyingReview.productName} ({replyingReview.rating} ★)</div>
+              <div style={{ marginTop: '4px' }}><em>"{replyingReview.comment}"</em></div>
+            </div>
+
             <div>
-              <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '600' }}>
-                Nội dung phản hồi từ ban quản trị *
-              </label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', gap: '8px', flexWrap: 'wrap' }}>
+                <label style={{ fontSize: '13px', fontWeight: '600' }}>
+                  Nội dung phản hồi từ ban quản trị *
+                </label>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={isGeneratingAi}
+                  style={{ padding: '4px 10px', fontSize: '12px', color: '#6b3fa0', borderColor: '#cbb8e8', background: '#f8f4ff' }}
+                  onClick={handleGenerateAiReply}
+                >
+                  {isGeneratingAi ? '⏳ AI đang soạn...' : '✨ Gợi ý phản hồi bằng AI'}
+                </button>
+              </div>
               <textarea 
                 required
                 rows={4}
@@ -281,18 +503,47 @@ export default function ReviewsPage() {
               <button type="button" className="secondary-button" onClick={() => setReplyingReview(null)}>
                 Hủy
               </button>
-              <button type="submit" className="primary-button">
-                Gửi phản hồi
+              <button type="submit" className="primary-button" disabled={isSubmitting}>
+                {isSubmitting ? 'Đang gửi...' : 'Gửi phản hồi'}
               </button>
             </div>
           </form>
         )}
       </DialogModal>
 
+      {/* Modal: Xác nhận xóa đánh giá spam/vi phạm */}
+      <DialogModal
+        isOpen={Boolean(deletingReview)}
+        onClose={() => setDeletingReview(null)}
+        title="Xác nhận xóa đánh giá"
+      >
+        {deletingReview && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <p style={{ margin: 0, lineHeight: '1.6' }}>
+              Bạn có chắc chắn muốn xóa vĩnh viễn đánh giá <strong>"{deletingReview.title}"</strong> của <strong>{deletingReview.customerName}</strong> cho sản phẩm <strong>{deletingReview.productName}</strong> không? Hệ thống sẽ tự động tính lại điểm xếp hạng trung bình của sản phẩm.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button type="button" className="secondary-button" onClick={() => setDeletingReview(null)}>
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                disabled={isSubmitting}
+                style={{ background: '#b23b3b', borderColor: '#b23b3b' }}
+                onClick={handleConfirmDelete}
+              >
+                {isSubmitting ? 'Đang xóa...' : 'Xác nhận xóa'}
+              </button>
+            </div>
+          </div>
+        )}
+      </DialogModal>
+
       {/* Toasts */}
       <div className="toasts-container" style={{ position: 'fixed', bottom: '24px', right: '24px', zIndex: 99999, display: 'flex', flexDirection: 'column', gap: '8px' }}>
         {toasts.map(t => (
-          <div key={t.id} style={{ background: '#27342b', color: '#fff', padding: '10px 18px', borderRadius: '10px', fontSize: '13px' }}>
+          <div key={t.id} style={{ background: t.type === 'error' ? '#8a2323' : '#27342b', color: '#fff', padding: '10px 18px', borderRadius: '10px', fontSize: '13px' }}>
             {t.message}
           </div>
         ))}

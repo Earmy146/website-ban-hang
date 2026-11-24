@@ -2,12 +2,14 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { PERIODS, LANGUAGES, CURRENT_USER } from '../../data/storeData';
 
-export function PeriodPopover({ activePeriod, onSelectPeriod, onClose }) {
+export function PeriodPopover({ periods, activePeriod, onSelectPeriod, onClose }) {
+  const periodList = Array.isArray(periods) && periods.length > 0 ? periods : PERIODS;
+
   return (
     <div id="header-popover-period" className="header-popover popover-period" role="menu" aria-label="Khoảng thời gian">
       <div className="popover-title">Khoảng thời gian</div>
-      {PERIODS.map((p) => {
-        const isChecked = p.id === activePeriod.id;
+      {periodList.map((p) => {
+        const isChecked = String(p.id) === String(activePeriod.id);
         return (
           <button
             key={p.id}
@@ -77,7 +79,7 @@ export function LanguagePopover({ activeLang, onSelectLang, onClose }) {
   );
 }
 
-export function NotificationsPopover({ notifications, onMarkAllRead, onMarkRead, onClose }) {
+export function NotificationsPopover({ notifications, onMarkAllRead, onMarkRead }) {
   const unreadCount = notifications.filter(n => n.unread).length;
 
   return (
@@ -88,24 +90,30 @@ export function NotificationsPopover({ notifications, onMarkAllRead, onMarkRead,
       </div>
 
       <div style={{ maxHeight: '280px', overflowY: 'auto' }}>
-        {notifications.map((n) => (
-          <div
-            key={n.id}
-            style={{
-              padding: '10px 14px',
-              borderBottom: '1px solid #41332115',
-              backgroundColor: n.unread ? '#fff8eb' : 'transparent',
-              cursor: 'pointer'
-            }}
-            onClick={() => onMarkRead(n.id)}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
-              <strong style={{ fontSize: '13px' }}>{n.title}</strong>
-              <small style={{ opacity: 0.6 }}>{n.time}</small>
+        {notifications.length === 0 ? (
+          <p style={{ padding: '16px', margin: 0, textAlign: 'center', fontSize: '12px', color: '#685947' }}>
+            Không có thông báo nào
+          </p>
+        ) : (
+          notifications.map((n) => (
+            <div
+              key={n.id}
+              style={{
+                padding: '10px 14px',
+                borderBottom: '1px solid #41332115',
+                backgroundColor: n.unread ? '#fff8eb' : 'transparent',
+                cursor: 'pointer'
+              }}
+              onClick={() => onMarkRead(n.id)}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
+                <strong style={{ fontSize: '13px' }}>{n.title}</strong>
+                <small style={{ opacity: 0.6 }}>{n.time}</small>
+              </div>
+              <p style={{ margin: 0, fontSize: '12px', color: '#685947', lineHeight: '1.4' }}>{n.detail}</p>
             </div>
-            <p style={{ margin: 0, fontSize: '12px', color: '#685947', lineHeight: '1.4' }}>{n.detail}</p>
-          </div>
-        ))}
+          ))
+        )}
       </div>
 
       {unreadCount > 0 && (
@@ -117,23 +125,44 @@ export function NotificationsPopover({ notifications, onMarkAllRead, onMarkRead,
           Đánh dấu tất cả là đã đọc
         </button>
       )}
+      <Link
+        to="/commerce/notifications"
+        style={{
+          display: 'block',
+          textAlign: 'center',
+          padding: '9px 12px',
+          borderTop: '1px solid #41332115',
+          fontSize: '12.5px',
+          fontWeight: '700',
+          color: '#276840',
+          textDecoration: 'none'
+        }}
+      >
+        Mở Trung tâm thông báo &rarr;
+      </Link>
     </div>
   );
 }
 
-export function ProfilePopover({ onClose }) {
+export function ProfilePopover({ currentUser, onClose, onLogout }) {
+  const user = currentUser || CURRENT_USER;
+  const avatarLetter = user.avatarLetter || (user.name ? user.name.trim()[0].toUpperCase() : 'A');
+
   return (
-    <div id="header-popover-profile" className="header-popover popover-profile" role="menu" aria-label="Tài khoản cá nhân" style={{ width: '220px' }}>
+    <div id="header-popover-profile" className="header-popover popover-profile" role="menu" aria-label="Tài khoản cá nhân" style={{ width: '230px' }}>
       <div className="popover-profile-summary" style={{ padding: '12px 14px', display: 'flex', gap: '10px', alignItems: 'center', borderBottom: '1px solid #41332115' }}>
         <span className="avatar" style={{ width: '32px', height: '32px', borderRadius: '50%', background: '#25211d', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold' }}>
-          {CURRENT_USER.avatarLetter}
+          {avatarLetter}
         </span>
         <div>
-          <strong style={{ display: 'block', fontSize: '13px' }}>{CURRENT_USER.name}</strong>
-          <span style={{ fontSize: '11px', color: '#685947' }}>{CURRENT_USER.role}</span>
+          <strong style={{ display: 'block', fontSize: '13px' }}>{user.name}</strong>
+          <span style={{ fontSize: '11px', color: '#685947' }}>{user.role}</span>
         </div>
       </div>
 
+      <Link role="menuitem" to="/store" onClick={onClose} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px', color: '#276840', fontWeight: '600', textDecoration: 'none', fontSize: '13px' }}>
+        <span>Mở giao diện Cửa hàng (/store)</span>
+      </Link>
       <Link role="menuitem" to="/commerce/settings-general" onClick={onClose} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px', color: 'inherit', textDecoration: 'none', fontSize: '13px' }}>
         <span>Cài đặt tài khoản</span>
       </Link>
@@ -143,8 +172,11 @@ export function ProfilePopover({ onClose }) {
       <button 
         type="button" 
         role="menuitem" 
-        onClick={onClose}
-        style={{ width: '100%', textAlign: 'left', background: 'none', border: 'none', padding: '10px 14px', fontSize: '13px', cursor: 'pointer', borderTop: '1px solid #41332115', color: '#c33' }}
+        onClick={() => {
+          onClose();
+          if (onLogout) onLogout();
+        }}
+        style={{ width: '100%', textAlign: 'left', background: 'none', border: 'none', padding: '10px 14px', fontSize: '13px', cursor: 'pointer', borderTop: '1px solid #41332115', color: '#c33', fontWeight: '600' }}
       >
         Đăng xuất
       </button>

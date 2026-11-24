@@ -1,13 +1,15 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import CouponHeading from '../../../components/commerce/discounts/CouponHeading';
 import CouponToolbar from '../../../components/commerce/discounts/CouponToolbar';
 import CouponTable from '../../../components/commerce/discounts/CouponTable';
 import DialogModal from '../../../components/ui/DialogModal';
 import { initialCoupons } from '../../../data/mockCoupons';
+import api from '../../../services/api';
 
 export default function CouponsPage() {
   const [coupons, setCoupons] = useState(initialCoupons);
   const [selectedIds, setSelectedIds] = useState([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Bộ lọc
   const [typeFilter, setTypeFilter] = useState('all');
@@ -19,6 +21,7 @@ export default function CouponsPage() {
   const [viewingCoupon, setViewingCoupon] = useState(null);
   const [editingCoupon, setEditingCoupon] = useState(null);
   const [deletingCoupon, setDeletingCoupon] = useState(null);
+  const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
 
   // Form tạo mã mới
   const [newCoupon, setNewCoupon] = useState({
@@ -34,13 +37,28 @@ export default function CouponsPage() {
 
   // Toasts
   const [toasts, setToasts] = useState([]);
-  const showToast = (message, type = 'success') => {
+  const showToast = useCallback((message, type = 'success') => {
     const id = Date.now() + Math.random();
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 3200);
-  };
+  }, []);
+
+  const loadCoupons = useCallback(async () => {
+    try {
+      const data = await api.getCoupons();
+      if (Array.isArray(data)) {
+        setCoupons(data);
+      }
+    } catch (err) {
+      showToast(err.message || 'Không thể tải danh sách mã giảm giá', 'error');
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    loadCoupons();
+  }, [loadCoupons]);
 
   // Lọc realtime
   const filteredCoupons = useMemo(() => {
@@ -49,8 +67,8 @@ export default function CouponsPage() {
       if (statusFilter !== 'all' && c.status !== statusFilter) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchCode = c.code.toLowerCase().includes(q);
-        const matchEl = c.eligibility.toLowerCase().includes(q);
+        const matchCode = (c.code || '').toLowerCase().includes(q);
+        const matchEl = (c.eligibility || '').toLowerCase().includes(q);
         if (!matchCode && !matchEl) return false;
       }
       return true;
@@ -77,10 +95,24 @@ export default function CouponsPage() {
   };
 
   const handleBulkDelete = () => {
-    if (window.confirm(`Bạn có chắc muốn xóa ${selectedIds.length} mã ưu đãi đã chọn không?`)) {
-      setCoupons(prev => prev.filter(c => !selectedIds.includes(c.id)));
-      showToast(`Đã xóa ${selectedIds.length} mã ưu đãi.`);
+    if (selectedIds.length === 0) return;
+    setIsBulkDeleteModalOpen(true);
+  };
+
+  const handleConfirmBulkDelete = async () => {
+    if (selectedIds.length === 0 || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const count = selectedIds.length;
+      await api.bulkDeleteCoupons(selectedIds);
+      await loadCoupons();
       setSelectedIds([]);
+      setIsBulkDeleteModalOpen(false);
+      showToast(`Đã xóa ${count} mã ưu đãi.`);
+    } catch (err) {
+      showToast(err.message || 'Lỗi khi xóa mã giảm giá hàng loạt', 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -91,7 +123,7 @@ export default function CouponsPage() {
       `"${c.code}"`,
       `"${c.discountType}"`,
       c.value,
-      c.minSpend.toFixed(2),
+      Number(c.minSpend || 0).toFixed(2),
       `"${c.eligibility}"`,
       c.usageCount,
       c.usageLimit,
@@ -112,57 +144,97 @@ export default function CouponsPage() {
   };
 
   // Tạo mã mới
-  const handleCreateCoupon = (e) => {
+  const handleCreateCoupon = async (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!newCoupon.code.trim()) {
       showToast('Vui lòng nhập mã ưu đãi!', 'error');
       return;
     }
 
-    const created = {
-      id: `coup-${Date.now()}`,
+    const payload = {
       code: newCoupon.code.trim().toUpperCase(),
       discountType: newCoupon.discountType,
       value: parseFloat(newCoupon.value) || 0,
       minSpend: parseFloat(newCoupon.minSpend) || 0,
       eligibility: newCoupon.eligibility,
-      status: 'Active',
-      usageCount: 0,
       usageLimit: parseInt(newCoupon.usageLimit, 10) || 100,
       startDate: newCoupon.startDate,
       endDate: newCoupon.endDate
     };
 
-    setCoupons([created, ...coupons]);
-    setIsAddModalOpen(false);
-    setNewCoupon({
-      code: '',
-      discountType: 'Phần trăm (%)',
-      value: 10,
-      minSpend: 50.00,
-      eligibility: 'Tất cả mọi người',
-      usageLimit: 100,
-      startDate: 'Hôm nay',
-      endDate: '31 Thg 12, 2026'
-    });
-    showToast(`Đã kích hoạt mã ưu đãi ${created.code}!`);
+    setIsSubmitting(true);
+    try {
+      const created = await api.createCoupon(payload);
+      if (created && created.id) {
+        setCoupons(prev => [created, ...prev]);
+      } else {
+        await loadCoupons();
+      }
+      setIsAddModalOpen(false);
+      setNewCoupon({
+        code: '',
+        discountType: 'Phần trăm (%)',
+        value: 10,
+        minSpend: 50.00,
+        eligibility: 'Tất cả mọi người',
+        usageLimit: 100,
+        startDate: 'Hôm nay',
+        endDate: '31 Thg 12, 2026'
+      });
+      showToast(`Đã kích hoạt mã ưu đãi ${payload.code}!`);
+    } catch (err) {
+      showToast(err.message || 'Không thể tạo mã giảm giá', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Lưu chỉnh sửa
-  const handleSaveEdit = (e) => {
+  const handleSaveEdit = async (e) => {
     e.preventDefault();
-    if (!editingCoupon) return;
-    setCoupons(prev => prev.map(c => c.id === editingCoupon.id ? editingCoupon : c));
-    setEditingCoupon(null);
-    showToast(`Đã lưu cập nhật cho mã ${editingCoupon.code}!`);
+    if (!editingCoupon || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const payload = {
+        value: Number(editingCoupon.value) || 0,
+        usageLimit: Number(editingCoupon.usageLimit) || 0,
+        minSpend: Number(editingCoupon.minSpend) || 0,
+        status: editingCoupon.status
+      };
+      const updated = await api.updateCoupon(editingCoupon.id, payload);
+      if (updated && updated.id) {
+        setCoupons(prev => prev.map(c => (c.id === editingCoupon.id ? updated : c)));
+      } else {
+        await loadCoupons();
+      }
+      const targetCode = editingCoupon.code;
+      setEditingCoupon(null);
+      showToast(`Đã lưu cập nhật cho mã ${targetCode}!`);
+    } catch (err) {
+      showToast(err.message || 'Không thể cập nhật mã giảm giá', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  // Xóa mã
-  const handleConfirmDelete = () => {
-    if (!deletingCoupon) return;
-    setCoupons(prev => prev.filter(c => c.id !== deletingCoupon.id));
-    setDeletingCoupon(null);
-    showToast(`Đã xóa mã ưu đãi ${deletingCoupon.code}!`);
+  // Xóa mã lẻ
+  const handleConfirmDelete = async () => {
+    if (!deletingCoupon || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const targetId = deletingCoupon.id;
+      const targetCode = deletingCoupon.code;
+      await api.deleteCoupon(targetId);
+      setCoupons(prev => prev.filter(c => c.id !== targetId));
+      setSelectedIds(prev => prev.filter(id => id !== targetId));
+      setDeletingCoupon(null);
+      showToast(`Đã xóa mã ưu đãi ${targetCode}!`);
+    } catch (err) {
+      showToast(err.message || 'Không thể xóa mã giảm giá', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -192,6 +264,33 @@ export default function CouponsPage() {
         onEditCoupon={setEditingCoupon}
         onDeleteCoupon={setDeletingCoupon}
       />
+
+      {/* Modal: Xác nhận xóa hàng loạt mã giảm giá */}
+      <DialogModal
+        isOpen={isBulkDeleteModalOpen}
+        onClose={() => setIsBulkDeleteModalOpen(false)}
+        title="Xác nhận xóa mã ưu đãi hàng loạt"
+      >
+        <div>
+          <p style={{ marginBottom: '16px', lineHeight: '1.6' }}>
+            Bạn có chắc chắn muốn xóa <strong>{selectedIds.length} mã giảm giá đã chọn</strong> không? Các mã này sẽ ngưng hiệu lực ngay lập tức trên cửa hàng.
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+            <button type="button" className="secondary-button" onClick={() => setIsBulkDeleteModalOpen(false)}>
+              Hủy bỏ
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              disabled={isSubmitting}
+              style={{ background: '#b23b3b', borderColor: '#b23b3b', color: '#fff' }}
+              onClick={handleConfirmBulkDelete}
+            >
+              {isSubmitting ? 'Đang xóa...' : `Xác nhận xóa (${selectedIds.length})`}
+            </button>
+          </div>
+        </div>
+      </DialogModal>
 
       {/* Modal: Tạo mã mới */}
       <DialogModal 
@@ -237,6 +336,7 @@ export default function CouponsPage() {
               </label>
               <input 
                 type="number" 
+                min="0"
                 className="c-field"
                 style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
                 value={newCoupon.value}
@@ -252,6 +352,7 @@ export default function CouponsPage() {
               </label>
               <input 
                 type="number" 
+                min="0"
                 className="c-field"
                 style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
                 value={newCoupon.minSpend}
@@ -264,6 +365,7 @@ export default function CouponsPage() {
               </label>
               <input 
                 type="number" 
+                min="1"
                 className="c-field"
                 style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
                 value={newCoupon.usageLimit}
@@ -297,8 +399,8 @@ export default function CouponsPage() {
             >
               Hủy
             </button>
-            <button type="submit" className="primary-button">
-              Lưu mã giảm giá
+            <button type="submit" className="primary-button" disabled={isSubmitting}>
+              {isSubmitting ? 'Đang lưu...' : 'Lưu mã giảm giá'}
             </button>
           </div>
         </form>
@@ -322,7 +424,7 @@ export default function CouponsPage() {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              <p><strong>Đơn tối thiểu:</strong> ${viewingCoupon.minSpend.toFixed(2)}</p>
+              <p><strong>Đơn tối thiểu:</strong> ${Number(viewingCoupon.minSpend || 0).toFixed(2)}</p>
               <p><strong>Đối tượng:</strong> {viewingCoupon.eligibility}</p>
               <p><strong>Lượt sử dụng:</strong> {viewingCoupon.usageCount} / {viewingCoupon.usageLimit}</p>
               <p><strong>Thời hạn:</strong> {viewingCoupon.startDate} - {viewingCoupon.endDate}</p>
@@ -366,6 +468,7 @@ export default function CouponsPage() {
                 </label>
                 <input 
                   type="number" 
+                  min="0"
                   className="c-field"
                   style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
                   value={editingCoupon.value}
@@ -378,6 +481,7 @@ export default function CouponsPage() {
                 </label>
                 <input 
                   type="number" 
+                  min="1"
                   className="c-field"
                   style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
                   value={editingCoupon.usageLimit}
@@ -393,6 +497,7 @@ export default function CouponsPage() {
                 </label>
                 <input 
                   type="number" 
+                  min="0"
                   className="c-field"
                   style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
                   value={editingCoupon.minSpend}
@@ -424,15 +529,15 @@ export default function CouponsPage() {
               >
                 Hủy
               </button>
-              <button type="submit" className="primary-button">
-                Lưu thay đổi
+              <button type="submit" className="primary-button" disabled={isSubmitting}>
+                {isSubmitting ? 'Đang lưu...' : 'Lưu thay đổi'}
               </button>
             </div>
           </form>
         )}
       </DialogModal>
 
-      {/* Modal: Xác nhận xóa mã */}
+      {/* Modal: Xác nhận xóa mã lẻ */}
       <DialogModal 
         isOpen={Boolean(deletingCoupon)} 
         onClose={() => setDeletingCoupon(null)}
@@ -454,10 +559,11 @@ export default function CouponsPage() {
               <button 
                 type="button" 
                 className="primary-button"
+                disabled={isSubmitting}
                 style={{ background: '#b23b3b', borderColor: '#b23b3b', color: '#fff' }}
                 onClick={handleConfirmDelete}
               >
-                Xác nhận xóa
+                {isSubmitting ? 'Đang xóa...' : 'Xác nhận xóa'}
               </button>
             </div>
           </div>

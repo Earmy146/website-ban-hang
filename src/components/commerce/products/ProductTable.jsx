@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import ProductRowMenu from './ProductRowMenu';
 
 export default function ProductTable({
@@ -87,9 +87,10 @@ export default function ProductTable({
               ) : (
                 products.map((p) => {
                   const isChecked = selectedIds.includes(p.id);
-                  const inventoryRatio = p.maxInventory > 0 ? Math.min(100, Math.round((p.inventory / p.maxInventory) * 100)) : 0;
-                  const isLow = p.inventory > 0 && p.inventory < 20;
-                  const isOut = p.inventory === 0;
+                  const maxInv = p.maxInventory || 100;
+                  const inventoryRatio = maxInv > 0 ? Math.min(100, Math.round(((p.inventory || 0) / maxInv) * 100)) : 0;
+                  const isLow = (p.inventory || 0) > 0 && (p.inventory || 0) < 20;
+                  const isOut = (p.inventory || 0) === 0;
 
                   return (
                     <tr key={p.id} className={isChecked ? 'selected' : ''}>
@@ -111,7 +112,7 @@ export default function ProductTable({
                           onClick={() => onViewProduct(p)}
                         >
                           <span className="product-thumb product-static-image" aria-hidden="true">
-                            <img src={p.image} alt="" loading="lazy" />
+                            <img src={p.image || '/assets/images/products/everyday-tee.png'} alt="" loading="lazy" />
                           </span>
                           <span>
                             <strong>{p.name}</strong>
@@ -131,33 +132,41 @@ export default function ProductTable({
 
                       {/* Status */}
                       <td>
-                        <span className={`product-status ${isOut ? 'red' : isLow ? 'amber' : 'green'}`}>
+                        <span className={`product-status ${p.isDeleted || isOut ? 'red' : isLow ? 'amber' : 'green'}`}>
                           <i></i>
-                          {p.status === 'Active' ? 'Đang bán' : p.status === 'Low stock' ? 'Sắp hết' : p.status === 'Out of stock' ? 'Hết hàng' : 'Bản nháp'}
+                          {p.isDeleted
+                            ? 'Đã lưu trữ'
+                            : p.status === 'Active'
+                              ? 'Đang bán'
+                              : p.status === 'Low stock'
+                                ? 'Sắp hết'
+                                : p.status === 'Out of stock'
+                                  ? 'Hết hàng'
+                                  : 'Bản nháp'}
                         </span>
                       </td>
 
                       {/* Inventory Progress */}
                       <td>
                         <div className={`product-inventory ${isOut ? 'red' : isLow ? 'amber' : 'green'}`}>
-                          <strong>{p.inventory} còn trong kho</strong>
+                          <strong>{p.inventory ?? 0} còn trong kho</strong>
                           <span><i style={{ width: `${inventoryRatio}%` }}></i></span>
                         </div>
                       </td>
 
                       {/* Sales */}
-                      <td>{p.sales.toLocaleString()}</td>
+                      <td>{Number(p.sales || 0).toLocaleString()}</td>
 
                       {/* Revenue */}
-                      <td><strong>${(p.revenue / 1000).toFixed(1)}K</strong></td>
+                      <td><strong>${(Number(p.revenue || 0) / 1000).toFixed(1)}K</strong></td>
 
                       {/* Trend */}
                       <td>
-                        <div className={`product-trend ${p.trendUp ? 'up' : 'down'}`}>
-                          <svg viewBox="0 0 72 32" role="img" aria-label={`Xu hướng ${p.trend}`}>
-                            <polyline points={p.trendUp ? "0.0,27.6 10.3,25.4 20.6,29.2 30.9,30.0 41.1,22.5 51.4,11.4 61.7,6.0 72.0,8.4" : "0.0,6.0 10.3,8.4 20.6,11.4 30.9,15.0 41.1,20.5 51.4,24.4 61.7,28.0 72.0,29.4"}></polyline>
+                        <div className={`product-trend ${p.trendUp !== false ? 'up' : 'down'}`}>
+                          <svg viewBox="0 0 72 32" role="img" aria-label={`Xu hướng ${p.trend || '+0.0%'}`}>
+                            <polyline points={p.trendUp !== false ? "0.0,27.6 10.3,25.4 20.6,29.2 30.9,30.0 41.1,22.5 51.4,11.4 61.7,6.0 72.0,8.4" : "0.0,6.0 10.3,8.4 20.6,11.4 30.9,15.0 41.1,20.5 51.4,24.4 61.7,28.0 72.0,29.4"}></polyline>
                           </svg>
-                          <small>{p.trend}</small>
+                          <small>{p.trend || '+0.0%'}</small>
                         </div>
                       </td>
 
@@ -169,12 +178,12 @@ export default function ProductTable({
                               <path d="M239.18,97.26A16.38,16.38,0,0,0,224.92,86l-59-4.76L143.14,26.15a16.36,16.36,0,0,0-30.27,0L90.11,81.23,31.08,86a16.46,16.46,0,0,0-9.37,28.86l45,38.83L53,211.75a16.38,16.38,0,0,0,24.5,17.82L128,198.49l50.53,31.08A16.4,16.4,0,0,0,203,211.75l-13.76-58.07,45-38.83A16.43,16.43,0,0,0,239.18,97.26Z"></path>
                             </svg>
                           </span>
-                          {' '}{p.rating}
+                          {' '}{p.rating ?? 5.0}
                         </span>
                       </td>
 
                       {/* Modified Date */}
-                      <td><span className="product-date">{p.date}</span></td>
+                      <td><span className="product-date">{p.date || 'Vừa xong'}</span></td>
 
                       {/* Menu 3 chấm */}
                       <td className="product-actions-cell">
@@ -198,4 +207,3 @@ export default function ProductTable({
     </section>
   );
 }
-

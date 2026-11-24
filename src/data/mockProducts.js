@@ -71,7 +71,7 @@ export const initialProducts = [
     trendUp: true,
     rating: 4.8,
     date: '15 Thg 7, 2026',
-    image: '/assets/images/products/canvas-tote.png',
+    image: '/assets/images/products/canvas-tote-bag.png',
     price: 32.00,
     desc: 'Vải Canvas mộc tự nhiên siêu bền, quai đeo may gia cố chịu tải lên đến 15kg.'
   },
@@ -185,7 +185,7 @@ export const initialProducts = [
     trendUp: true,
     rating: 4.8,
     date: '09 Thg 7, 2026',
-    image: '/assets/images/products/leather-passport.png',
+    image: '/assets/images/products/travel-pouch.png',
     price: 35.00,
     desc: 'Da bò thuộc sáp thảo mộc tự nhiên, càng dùng càng bóng đẹp theo thời gian.'
   },
@@ -204,7 +204,7 @@ export const initialProducts = [
     trendUp: false,
     rating: 4.6,
     date: '08 Thg 7, 2026',
-    image: '/assets/images/products/desk-tray.png',
+    image: '/assets/images/products/desk-organizer.png',
     price: 20.00,
     desc: 'Gỗ sồi tự nhiên tiện nguyên khối, phủ dầu lau thực vật an toàn cho góc làm việc gọn gàng.'
   },
@@ -223,7 +223,7 @@ export const initialProducts = [
     trendUp: true,
     rating: 4.8,
     date: '07 Thg 7, 2026',
-    image: '/assets/images/products/card-holder.png',
+    image: '/assets/images/products/stoneware-bowl.png',
     price: 25.00,
     desc: 'Thiết kế siêu mỏng tích hợp công nghệ chống quét trộm sóng RFID an toàn.'
   }

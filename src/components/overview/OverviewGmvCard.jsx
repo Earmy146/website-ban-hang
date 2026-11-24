@@ -1,8 +1,36 @@
 import React from 'react';
 
-export default function OverviewGmvCard() {
-  const bars = [35, 52, 44, 68, 85, 72, 95, 80, 110, 98, 125, 118];
-  const maxVal = Math.max(...bars);
+function formatMoney(val, fallback) {
+  if (val === undefined || val === null) return fallback;
+  if (typeof val === 'number') {
+    return `$${val.toLocaleString('en-US', {
+      minimumFractionDigits: val % 1 !== 0 ? 2 : 0,
+      maximumFractionDigits: 2,
+    })}`;
+  }
+  const str = String(val);
+  return str.startsWith('$') ? str : `$${str}`;
+}
+
+function formatPercent(val, fallback, withSign = false) {
+  if (val === undefined || val === null) return fallback;
+  if (typeof val === 'number') {
+    const prefix = withSign && val > 0 ? '+' : '';
+    return `${prefix}${val}%`;
+  }
+  return String(val);
+}
+
+export default function OverviewGmvCard({ data }) {
+  const defaultBars = [35, 52, 44, 68, 85, 72, 95, 80, 110, 98, 125, 118];
+  const bars = Array.isArray(data?.bars) && data.bars.length > 0 ? data.bars : defaultBars;
+  const maxVal = Math.max(...bars.map(v => Number(v) || 0), 1);
+
+  const gmvLabel = formatMoney(data?.gmv, '$68,420');
+  const deltaLabel = formatPercent(data?.delta, '+12%', true);
+  const isNegative = String(deltaLabel).trim().startsWith('-');
+  const conversionLabel = formatPercent(data?.conversionRate, '3.4%');
+  const aovLabel = formatMoney(data?.aov, '$54.80');
 
   return (
     <section className="glass-card sales-summary" aria-label="Tổng doanh số">
@@ -25,7 +53,7 @@ export default function OverviewGmvCard() {
       </div>
 
       <div className="sales-total">
-        <strong>$68,420</strong>
+        <strong>{gmvLabel}</strong>
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: '4px', height: '36px', padding: '4px 0' }}>
           {bars.map((v, i) => (
             <div 
@@ -33,36 +61,35 @@ export default function OverviewGmvCard() {
               style={{
                 flex: 1,
                 background: i === bars.length - 1 ? '#d69e2e' : '#e2d3b7',
-                height: `${Math.round((v / maxVal) * 100)}%`,
+                height: `${Math.max(8, Math.round(((Number(v) || 0) / maxVal) * 100))}%`,
                 borderRadius: '3px'
               }}
-              title={`Tuần ${i + 1}: $${v * 100}`}
+              title={`Mốc ${i + 1}: ${v}`}
             />
           ))}
         </div>
       </div>
 
-      <div className="sales-delta positive">
+      <div className={`sales-delta ${isNegative ? 'negative' : 'positive'}`}>
         <span className="icon" aria-hidden="true">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor">
-            <path d="M213.66,122.34a8,8,0,0,1,0,11.32l-80,80a8,8,0,0,1-11.32,0l-80-80a8,8,0,0,1,11.32-11.32L120,188.69V40a8,8,0,0,1,16,0V188.69l66.34-66.35A8,8,0,0,1,213.66,122.34Z" transform="rotate(180 128 128)"></path>
+            <path d="M213.66,122.34a8,8,0,0,1,0,11.32l-80,80a8,8,0,0,1-11.32,0l-80-80a8,8,0,0,1,11.32-11.32L120,188.69V40a8,8,0,0,1,16,0V188.69l66.34-66.35A8,8,0,0,1,213.66,122.34Z" transform={isNegative ? undefined : 'rotate(180 128 128)'}></path>
           </svg>
         </span>
-        <strong>+12%</strong>
+        <strong>{deltaLabel}</strong>
         <span>so với kỳ trước</span>
       </div>
 
       <div className="sales-substats">
         <div>
           <span>Tỷ lệ chuyển đổi</span>
-          <strong>3.4%</strong>
+          <strong>{conversionLabel}</strong>
         </div>
         <div>
           <span>Đơn TB (AOV)</span>
-          <strong>$54.80</strong>
+          <strong>{aovLabel}</strong>
         </div>
       </div>
     </section>
   );
 }
-

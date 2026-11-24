@@ -65,6 +65,41 @@ export default function Sidebar({ isCollapsed, toggleCollapse, closeMobileNav })
         </span>
       </button>
 
+      {/* Lối tắt nổi bật sang Cửa hàng người dùng (/store) */}
+      <div style={{ padding: isCollapsed ? '8px 10px 4px' : '8px 16px 4px' }}>
+        <Link
+          to="/store"
+          title="Mở giao diện Cửa hàng người dùng (/store)"
+          onClick={closeMobileNav}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: isCollapsed ? 'center' : 'space-between',
+            gap: '8px',
+            padding: isCollapsed ? '9px' : '9px 12px',
+            borderRadius: '11px',
+            background: 'linear-gradient(135deg, #27342b 0%, #374a3d 100%)',
+            color: '#fffdf9',
+            textDecoration: 'none',
+            fontSize: '12.5px',
+            fontWeight: '700',
+            boxShadow: '0 4px 12px rgba(39, 52, 43, 0.18)',
+          }}
+        >
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+            <span className="icon" aria-hidden="true" style={{ width: '16px', height: '16px', color: '#f3c669' }}>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor">
+                <path d="M232,96a7.89,7.89,0,0,0-.3-2.2L217.35,43.6A16.07,16.07,0,0,0,202,32H54A16.07,16.07,0,0,0,38.65,43.6L24.31,93.8A7.89,7.89,0,0,0,24,96h0v16a40,40,0,0,0,16,32v72a8,8,0,0,0,8,8H208a8,8,0,0,0,8-8V144a40,40,0,0,0,16-32V96ZM54,48H202l11.42,40H42.61ZM200,208H56V151.2a40.57,40.57,0,0,0,8,.8,40,40,0,0,0,32-16,40,40,0,0,0,64,0,40,40,0,0,0,32,16,40.57,40.57,0,0,0,8-.8Z"></path>
+              </svg>
+            </span>
+            {!isCollapsed && <span>Xem cửa hàng</span>}
+          </span>
+          {!isCollapsed && (
+            <span style={{ fontSize: '11px', opacity: 0.8, fontWeight: '600' }}>/store &rarr;</span>
+          )}
+        </Link>
+      </div>
+
       <nav className="navigation">
         {navData.map((section, sIdx) => (
           <section key={sIdx} className="nav-group" aria-label={section.groupTitle}>
@@ -95,7 +130,6 @@ export default function Sidebar({ isCollapsed, toggleCollapse, closeMobileNav })
                   );
                 }
 
-                // Group with children
                 const isOpen = Boolean(openGroups[item.id]);
                 const isAnyChildActive = item.children?.some(c => c.path === currentPath);
 

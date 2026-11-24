@@ -64,6 +64,8 @@ export default function OrderTable({
         return <span className="order-state amber"><i></i>Đã đóng gói</span>;
       case 'Processing':
         return <span className="order-state amber"><i></i>Đang xử lý</span>;
+      case 'Cancelled':
+        return <span className="order-state red"><i></i>Đã hủy</span>;
       default:
         return <span className="order-state"><i></i>{status}</span>;
     }

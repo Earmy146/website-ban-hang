@@ -4,7 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/dev-all.mjs",
+    "dev:fe": "vite",
+    "dev:be": "npm --prefix backend run dev",
     "build": "vite build",
     "preview": "vite preview"
   },

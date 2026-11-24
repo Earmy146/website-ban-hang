@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 
 export default function ProductRowMenu({
   product,
@@ -11,33 +12,50 @@ export default function ProductRowMenu({
   const [isOpen, setIsOpen] = useState(false);
   const [coords, setCoords] = useState({ top: 0, left: 0 });
   const triggerRef = useRef(null);
+  const menuRef = useRef(null);
 
   const toggleMenu = (e) => {
     e.stopPropagation();
     if (!isOpen && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect();
-      const menuWidth = 200;
+      const menuWidth = 228;
+      const menuHeight = 240;
       let left = rect.right - menuWidth;
       if (left < 12) left = 12;
-      if (left + menuWidth > window.innerWidth - 12) left = window.innerWidth - menuWidth - 12;
+      if (left + menuWidth > window.innerWidth - 12) {
+        left = window.innerWidth - menuWidth - 12;
+      }
 
       let top = rect.bottom + 6;
-      if (top + 260 > window.innerHeight) {
-        top = Math.max(12, rect.top - 260);
+      if (top + menuHeight > window.innerHeight - 12) {
+        top = Math.max(12, rect.top - menuHeight - 6);
       }
       setCoords({ top, left });
+      setIsOpen(true);
+    } else {
+      setIsOpen(false);
     }
-    setIsOpen(prev => !prev);
   };
 
   useEffect(() => {
     if (!isOpen) return;
-    const handleClose = () => setIsOpen(false);
-    window.addEventListener('click', handleClose);
-    window.addEventListener('scroll', handleClose, true);
+    const handleClickOutside = (e) => {
+      if (
+        menuRef.current && !menuRef.current.contains(e.target) &&
+        triggerRef.current && !triggerRef.current.contains(e.target)
+      ) {
+        setIsOpen(false);
+      }
+    };
+    const handleScroll = (e) => {
+      if (menuRef.current && menuRef.current.contains(e.target)) return;
+      setIsOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('scroll', handleScroll, true);
     return () => {
-      window.removeEventListener('click', handleClose);
-      window.removeEventListener('scroll', handleClose, true);
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('scroll', handleScroll, true);
     };
   }, [isOpen]);
 
@@ -57,8 +75,9 @@ export default function ProductRowMenu({
         </span>
       </button>
 
-      {isOpen && (
+      {isOpen && createPortal(
         <div 
+          ref={menuRef}
           className="product-row-menu-panel is-positioned"
           style={{
             position: 'fixed',
@@ -68,7 +87,6 @@ export default function ProductRowMenu({
           }}
           onClick={e => e.stopPropagation()}
         >
-          {/* Xem chi tiết */}
           <button type="button" onClick={() => { setIsOpen(false); onView(product); }}>
             <span className="icon" aria-hidden="true">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor">
@@ -78,7 +96,6 @@ export default function ProductRowMenu({
             <span>Xem chi tiết</span>
           </button>
 
-          {/* Chỉnh sửa */}
           <button type="button" onClick={() => { setIsOpen(false); onEdit(product); }}>
             <span className="icon" aria-hidden="true">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor">
@@ -88,7 +105,6 @@ export default function ProductRowMenu({
             <span>Chỉnh sửa</span>
           </button>
 
-          {/* Nhân bản */}
           <button type="button" onClick={() => { setIsOpen(false); onDuplicate(product); }}>
             <span className="icon" aria-hidden="true">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor">
@@ -98,7 +114,6 @@ export default function ProductRowMenu({
             <span>Nhân bản</span>
           </button>
 
-          {/* Chia sẻ */}
           <button type="button" onClick={() => { setIsOpen(false); onShare(product); }}>
             <span className="icon" aria-hidden="true">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor">
@@ -110,7 +125,6 @@ export default function ProductRowMenu({
 
           <span className="product-menu-rule"></span>
 
-          {/* Xóa sản phẩm */}
           <button type="button" className="danger" onClick={() => { setIsOpen(false); onDelete(product); }}>
             <span className="icon" aria-hidden="true">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor">
@@ -119,9 +133,9 @@ export default function ProductRowMenu({
             </span>
             <span>Xóa sản phẩm</span>
           </button>
-        </div>
+        </div>,
+        document.body
       )}
     </span>
   );
 }
-

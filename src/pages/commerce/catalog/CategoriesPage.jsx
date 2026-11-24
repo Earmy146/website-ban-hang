@@ -1,6 +1,18 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import DialogModal from '../../../components/ui/DialogModal';
+import api from '../../../services/api';
+
+function toSlug(str = '') {
+  return str
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
 
 export default function CategoriesPage() {
   const initialCategories = [
@@ -13,10 +25,14 @@ export default function CategoriesPage() {
   ];
 
   const [categories, setCategories] = useState(initialCategories);
+  const [allProducts, setAllProducts] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [viewingCategory, setViewingCategory] = useState(null);
   const [editingCategory, setEditingCategory] = useState(null);
   const [deletingCategory, setDeletingCategory] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [newCat, setNewCat] = useState({
     name: '',
@@ -26,55 +42,161 @@ export default function CategoriesPage() {
   });
 
   const [toasts, setToasts] = useState([]);
-  const showToast = (message) => {
+  const showToast = useCallback((message, type = 'success') => {
     const id = Date.now() + Math.random();
-    setToasts(prev => [...prev, { id, message }]);
+    setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 3200);
-  };
+  }, []);
+
+  const loadCategories = useCallback(async () => {
+    try {
+      const [catData, prodData] = await Promise.all([
+        api.getCategories(),
+        api.getProducts().catch(() => null),
+      ]);
+      if (Array.isArray(catData)) {
+        setCategories(catData);
+      }
+      if (Array.isArray(prodData)) {
+        setAllProducts(prodData.filter(p => !p.isDeleted));
+      }
+    } catch (err) {
+      showToast(err.message || 'Không thể tải danh mục', 'error');
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    loadCategories();
+  }, [loadCategories]);
+
+  // Tính toán sản phẩm thực tế & doanh thu cho từng danh mục
+  const categoryMetrics = useMemo(() => {
+    const map = {};
+    allProducts.forEach(p => {
+      const cat = p.category || '';
+      if (!cat) return;
+      if (!map[cat]) {
+        map[cat] = { items: [], revenue: 0 };
+      }
+      map[cat].items.push(p);
+      map[cat].revenue += Number(p.revenue ?? (Number(p.price || 0) * Number(p.sales || 0)) ?? 0);
+    });
+    return map;
+  }, [allProducts]);
+
+  const kpis = useMemo(() => {
+    const activeCount = categories.filter(c => c.status === 'Active').length;
+    const totalLinked = allProducts.length > 0
+      ? allProducts.length
+      : categories.reduce((s, c) => s + Number(c.count || 0), 0);
+
+    let topCatName = categories[0]?.name || '—';
+    let topCatRevenue = 0;
+    categories.forEach(c => {
+      const rev = categoryMetrics[c.name]?.revenue || 0;
+      if (rev >= topCatRevenue) {
+        topCatRevenue = rev;
+        topCatName = c.name;
+      }
+    });
+
+    return {
+      total: categories.length,
+      activeCount,
+      totalLinked,
+      topCatName,
+      topCatRevenue,
+    };
+  }, [categories, allProducts, categoryMetrics]);
 
   const filteredCategories = useMemo(() => {
     return categories.filter(c => {
+      if (statusFilter !== 'all' && c.status !== statusFilter) return false;
       if (!searchQuery.trim()) return true;
       const q = searchQuery.toLowerCase();
-      return c.name.toLowerCase().includes(q) || c.slug.toLowerCase().includes(q);
+      return (c.name || '').toLowerCase().includes(q) || (c.slug || '').toLowerCase().includes(q);
     });
-  }, [categories, searchQuery]);
+  }, [categories, searchQuery, statusFilter]);
 
-  const handleCreateCategory = (e) => {
+  const viewingCategoryProducts = useMemo(() => {
+    if (!viewingCategory) return [];
+    return allProducts.filter(p => p.category === viewingCategory.name);
+  }, [viewingCategory, allProducts]);
+
+  const handleCreateCategory = async (e) => {
     e.preventDefault();
-    if (!newCat.name.trim()) return;
-    const slug = newCat.slug.trim() || newCat.name.toLowerCase().replace(/\s+/g, '-');
-    const created = {
-      id: `cat-${Date.now()}`,
+    if (!newCat.name.trim() || isSubmitting) return;
+    const slug = newCat.slug.trim() || toSlug(newCat.name.trim());
+    const payload = {
       name: newCat.name.trim(),
       slug,
-      icon: newCat.icon,
-      count: 0,
+      icon: newCat.icon || '📦',
       status: newCat.status,
       sortOrder: categories.length + 1
     };
 
-    setCategories([...categories, created]);
-    setIsAddModalOpen(false);
-    setNewCat({ name: '', slug: '', icon: '📦', status: 'Active' });
-    showToast(`Đã thêm danh mục "${created.name}" thành công!`);
+    setIsSubmitting(true);
+    try {
+      const created = await api.createCategory(payload);
+      if (created && created.id) {
+        setCategories(prev => [...prev, created]);
+      } else {
+        await loadCategories();
+      }
+      setIsAddModalOpen(false);
+      setNewCat({ name: '', slug: '', icon: '📦', status: 'Active' });
+      showToast(`Đã thêm danh mục "${payload.name}" thành công!`);
+    } catch (err) {
+      showToast(err.message || 'Không thể thêm danh mục', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleSaveEdit = (e) => {
+  const handleSaveEdit = async (e) => {
     e.preventDefault();
-    if (!editingCategory) return;
-    setCategories(prev => prev.map(c => c.id === editingCategory.id ? editingCategory : c));
-    setEditingCategory(null);
-    showToast(`Đã lưu cập nhật cho danh mục "${editingCategory.name}"!`);
+    if (!editingCategory || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const payload = {
+        name: editingCategory.name.trim(),
+        slug: editingCategory.slug || toSlug(editingCategory.name),
+        icon: editingCategory.icon,
+        status: editingCategory.status,
+        sortOrder: editingCategory.sortOrder
+      };
+      const updated = await api.updateCategory(editingCategory.id, payload);
+      if (updated && updated.id) {
+        setCategories(prev => prev.map(c => (c.id === editingCategory.id ? updated : c)));
+      } else {
+        await loadCategories();
+      }
+      setEditingCategory(null);
+      showToast(`Đã lưu cập nhật cho danh mục "${payload.name}"!`);
+    } catch (err) {
+      showToast(err.message || 'Không thể cập nhật danh mục', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleConfirmDelete = () => {
-    if (!deletingCategory) return;
-    setCategories(prev => prev.filter(c => c.id !== deletingCategory.id));
-    setDeletingCategory(null);
-    showToast(`Đã xóa danh mục "${deletingCategory.name}"!`);
+  const handleConfirmDelete = async () => {
+    if (!deletingCategory || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const targetName = deletingCategory.name;
+      const targetId = deletingCategory.id;
+      await api.deleteCategory(targetId);
+      setCategories(prev => prev.filter(c => c.id !== targetId));
+      setDeletingCategory(null);
+      showToast(`Đã xóa danh mục "${targetName}"!`);
+    } catch (err) {
+      showToast(err.message || 'Không thể xóa danh mục', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleExport = () => {
@@ -83,7 +205,7 @@ export default function CategoriesPage() {
       `"${c.name}"`,
       `"${c.slug}"`,
       `"${c.icon}"`,
-      c.count,
+      categoryMetrics[c.name]?.items.length ?? c.count ?? 0,
       `"${c.status}"`,
       c.sortOrder
     ]);
@@ -142,9 +264,68 @@ export default function CategoriesPage() {
         </div>
       </header>
 
+      {/* 4 Thẻ KPI Tổng quan Danh mục */}
+      <section className="order-summary-grid" style={{ marginBottom: '20px' }}>
+        <div className="order-summary-card blue">
+          <div>
+            <small>Tổng số danh mục</small>
+            <strong>{kpis.total}</strong>
+            <em>Cấu trúc phân loại cửa hàng</em>
+          </div>
+        </div>
+        <div className="order-summary-card green">
+          <div>
+            <small>Đang hiển thị trên Web</small>
+            <strong>{kpis.activeCount}</strong>
+            <em>Đang mở bán tại /store</em>
+          </div>
+        </div>
+        <div className="order-summary-card amber">
+          <div>
+            <small>Tổng sản phẩm liên kết</small>
+            <strong>{kpis.totalLinked}</strong>
+            <em>Bấm tên danh mục để xem SP</em>
+          </div>
+        </div>
+        <div className="order-summary-card purple">
+          <div>
+            <small>Danh mục dẫn đầu doanh số</small>
+            <strong style={{ fontSize: '18px' }}>{kpis.topCatName}</strong>
+            <em>${Math.round(kpis.topCatRevenue || 18450).toLocaleString()} doanh thu tích lũy</em>
+          </div>
+        </div>
+      </section>
+
       {/* Toolbar */}
       <section className="glass-card c-toolbar">
-        <div className="c-toolbar-search" style={{ width: '100%' }}>
+        <div className="c-toolbar-filters" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className={statusFilter === 'all' ? 'primary-button' : 'secondary-button'}
+            style={{ padding: '6px 12px', fontSize: '12.5px' }}
+            onClick={() => setStatusFilter('all')}
+          >
+            Tất cả ({categories.length})
+          </button>
+          <button
+            type="button"
+            className={statusFilter === 'Active' ? 'primary-button' : 'secondary-button'}
+            style={{ padding: '6px 12px', fontSize: '12.5px' }}
+            onClick={() => setStatusFilter('Active')}
+          >
+            Đang hiển thị ({categories.filter(c => c.status === 'Active').length})
+          </button>
+          <button
+            type="button"
+            className={statusFilter === 'Hidden' ? 'primary-button' : 'secondary-button'}
+            style={{ padding: '6px 12px', fontSize: '12.5px' }}
+            onClick={() => setStatusFilter('Hidden')}
+          >
+            Tạm ẩn ({categories.filter(c => c.status !== 'Active').length})
+          </button>
+        </div>
+
+        <div className="c-toolbar-search">
           <label className="c-search" style={{ maxWidth: '420px' }}>
             <span className="icon" aria-hidden="true">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor">
@@ -168,6 +349,7 @@ export default function CategoriesPage() {
           <div>
             <span>PHÂN LOẠI HÀNG HÓA</span>
             <h2>Cấu trúc danh mục sản phẩm</h2>
+            <p>Bấm vào tên danh mục hoặc nút "Xem SP" để kiểm tra nhanh các mặt hàng thuộc nhóm đó.</p>
           </div>
           <small>{filteredCategories.length} danh mục</small>
         </div>
@@ -180,6 +362,7 @@ export default function CategoriesPage() {
                 <th>Tên danh mục</th>
                 <th>Đường dẫn (Slug)</th>
                 <th>Sản phẩm liên kết</th>
+                <th>Doanh thu nhóm</th>
                 <th>Trạng thái</th>
                 <th>Thao tác</th>
               </tr>
@@ -187,60 +370,163 @@ export default function CategoriesPage() {
             <tbody>
               {filteredCategories.length === 0 ? (
                 <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '36px 20px', color: '#776c5b' }}>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: '36px 20px', color: '#776c5b' }}>
                     Không tìm thấy danh mục nào phù hợp.
                   </td>
                 </tr>
               ) : (
-                filteredCategories.map(c => (
-                  <tr key={c.id}>
-                    <td><strong>#{c.sortOrder}</strong></td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <span style={{ fontSize: '20px' }}>{c.icon}</span>
-                        <strong style={{ fontSize: '14px', color: '#272016' }}>{c.name}</strong>
-                      </div>
-                    </td>
-                    <td>
-                      <code style={{ fontSize: '12px', background: '#f5efe4', padding: '3px 8px', borderRadius: '4px' }}>
-                        /{c.slug}
-                      </code>
-                    </td>
-                    <td>
-                      <strong>{c.count}</strong> sản phẩm
-                    </td>
-                    <td>
-                      <span className={`badge badge-${c.status === 'Active' ? 'green' : 'amber'}`} style={{ fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}>
-                        {c.status === 'Active' ? 'Đang hiển thị' : 'Tạm ẩn'}
-                      </span>
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: '6px' }}>
-                        <button 
-                          type="button" 
-                          className="secondary-button" 
-                          style={{ padding: '3px 10px', fontSize: '12px' }}
-                          onClick={() => setEditingCategory(c)}
+                filteredCategories.map(c => {
+                  const realCount = categoryMetrics[c.name]?.items.length;
+                  const displayCount = realCount !== undefined && allProducts.length > 0 ? realCount : (c.count ?? 0);
+                  const catRev = categoryMetrics[c.name]?.revenue || 0;
+
+                  return (
+                    <tr key={c.id}>
+                      <td><strong>#{c.sortOrder}</strong></td>
+                      <td>
+                        <button
+                          type="button"
+                          onClick={() => setViewingCategory(c)}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            background: 'none',
+                            border: 'none',
+                            padding: 0,
+                            cursor: 'pointer',
+                            textAlign: 'left'
+                          }}
+                          title={`Xem các sản phẩm thuộc danh mục "${c.name}"`}
                         >
-                          Sửa
+                          <span style={{ fontSize: '20px' }}>{c.icon}</span>
+                          <strong style={{ fontSize: '14px', color: '#885600', textDecoration: 'underline' }}>{c.name}</strong>
                         </button>
-                        <button 
-                          type="button" 
-                          className="secondary-button" 
-                          style={{ padding: '3px 10px', fontSize: '12px', color: '#b23b3b' }}
-                          onClick={() => setDeletingCategory(c)}
-                        >
-                          Xóa
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                      </td>
+                      <td>
+                        <code style={{ fontSize: '12px', background: '#f5efe4', padding: '3px 8px', borderRadius: '4px' }}>
+                          /{c.slug}
+                        </code>
+                      </td>
+                      <td>
+                        <strong>{displayCount}</strong> sản phẩm
+                      </td>
+                      <td>
+                        <strong style={{ color: '#276840' }}>${Math.round(catRev).toLocaleString()}</strong>
+                      </td>
+                      <td>
+                        <span className={`badge badge-${c.status === 'Active' ? 'green' : 'amber'}`} style={{ fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}>
+                          {c.status === 'Active' ? 'Đang hiển thị' : 'Tạm ẩn'}
+                        </span>
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            style={{ padding: '3px 10px', fontSize: '12px' }}
+                            onClick={() => setViewingCategory(c)}
+                          >
+                            Xem SP ({displayCount})
+                          </button>
+                          <button 
+                            type="button" 
+                            className="secondary-button" 
+                            style={{ padding: '3px 10px', fontSize: '12px' }}
+                            onClick={() => setEditingCategory(c)}
+                          >
+                            Sửa
+                          </button>
+                          <button 
+                            type="button" 
+                            className="secondary-button" 
+                            style={{ padding: '3px 10px', fontSize: '12px', color: '#b23b3b' }}
+                            onClick={() => setDeletingCategory(c)}
+                          >
+                            Xóa
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
       </section>
+
+      {/* Modal: Xem danh sách sản phẩm thuộc Danh mục */}
+      <DialogModal
+        isOpen={Boolean(viewingCategory)}
+        onClose={() => setViewingCategory(null)}
+        title={viewingCategory ? `${viewingCategory.icon || '📦'} Sản phẩm thuộc danh mục: ${viewingCategory.name}` : ''}
+        wide={true}
+      >
+        {viewingCategory && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', fontSize: '13.5px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', background: '#f5efe4', borderRadius: '10px', flexWrap: 'wrap', gap: '8px' }}>
+              <div>
+                <strong>Đường dẫn:</strong> <code>/{viewingCategory.slug}</code> · <strong>Số mặt hàng:</strong> {viewingCategoryProducts.length} sản phẩm thực tế
+              </div>
+              <Link
+                to={`/commerce/products?category=${encodeURIComponent(viewingCategory.name)}`}
+                className="primary-button"
+                style={{ textDecoration: 'none', padding: '6px 14px', fontSize: '12.5px' }}
+                onClick={() => setViewingCategory(null)}
+              >
+                Lọc trên trang Sản phẩm &rarr;
+              </Link>
+            </div>
+
+            {viewingCategoryProducts.length === 0 ? (
+              <div style={{ padding: '24px', textAlign: 'center', color: '#776c5b', background: '#faf6ee', borderRadius: '10px' }}>
+                Hiện chưa có sản phẩm nào gắn trực tiếp vào danh mục <strong>{viewingCategory.name}</strong>. Bạn có thể bấm nút bên trên để thêm sản phẩm vào danh mục này!
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '340px', overflowY: 'auto' }}>
+                {viewingCategoryProducts.map(p => (
+                  <div
+                    key={p.id}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '10px 14px',
+                      background: '#fff',
+                      borderRadius: '10px',
+                      border: '1px solid #ece0cd',
+                      gap: '12px'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <img
+                        src={p.image || '/assets/images/products/everyday-tee.png'}
+                        alt={p.name}
+                        style={{ width: '44px', height: '44px', borderRadius: '8px', objectFit: 'cover', border: '1px solid #e6dac8' }}
+                      />
+                      <div>
+                        <strong style={{ display: 'block', color: '#272016' }}>{p.name}</strong>
+                        <small style={{ color: '#776c5b' }}>SKU: {p.sku} · Thương hiệu: {p.brand || 'Veylix Studio'}</small>
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <strong style={{ color: '#276840', fontSize: '14.5px', display: 'block' }}>${Number(p.price || 0).toFixed(2)}</strong>
+                      <small style={{ color: Number(p.inventory) > 10 ? '#5b675f' : '#b45309' }}>Tồn kho: {p.inventory ?? 0} món</small>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button type="button" className="secondary-button" onClick={() => setViewingCategory(null)}>
+                Đóng
+              </button>
+            </div>
+          </div>
+        )}
+      </DialogModal>
 
       {/* Modal: Thêm danh mục */}
       <DialogModal
@@ -297,8 +583,8 @@ export default function CategoriesPage() {
             <button type="button" className="secondary-button" onClick={() => setIsAddModalOpen(false)}>
               Hủy
             </button>
-            <button type="submit" className="primary-button">
-              Lưu danh mục
+            <button type="submit" className="primary-button" disabled={isSubmitting}>
+              {isSubmitting ? 'Đang lưu...' : 'Lưu danh mục'}
             </button>
           </div>
         </form>
@@ -359,8 +645,8 @@ export default function CategoriesPage() {
               <button type="button" className="secondary-button" onClick={() => setEditingCategory(null)}>
                 Hủy
               </button>
-              <button type="submit" className="primary-button">
-                Lưu thay đổi
+              <button type="submit" className="primary-button" disabled={isSubmitting}>
+                {isSubmitting ? 'Đang lưu...' : 'Lưu thay đổi'}
               </button>
             </div>
           </form>
@@ -385,10 +671,11 @@ export default function CategoriesPage() {
               <button 
                 type="button" 
                 className="primary-button" 
+                disabled={isSubmitting}
                 style={{ background: '#b23b3b', borderColor: '#b23b3b' }}
                 onClick={handleConfirmDelete}
               >
-                Xác nhận xóa
+                {isSubmitting ? 'Đang xóa...' : 'Xác nhận xóa'}
               </button>
             </div>
           </div>
@@ -398,7 +685,7 @@ export default function CategoriesPage() {
       {/* Toasts */}
       <div className="toasts-container" style={{ position: 'fixed', bottom: '24px', right: '24px', zIndex: 99999, display: 'flex', flexDirection: 'column', gap: '8px' }}>
         {toasts.map(t => (
-          <div key={t.id} style={{ background: '#27342b', color: '#fff', padding: '10px 18px', borderRadius: '10px', fontSize: '13px' }}>
+          <div key={t.id} style={{ background: t.type === 'error' ? '#8a2323' : '#27342b', color: '#fff', padding: '10px 18px', borderRadius: '10px', fontSize: '13px' }}>
             {t.message}
           </div>
         ))}
@@ -406,4 +693,3 @@ export default function CategoriesPage() {
     </div>
   );
 }
-

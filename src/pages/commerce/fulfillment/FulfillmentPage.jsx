@@ -1,6 +1,38 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import DialogModal from '../../../components/ui/DialogModal';
+import api from '../../../services/api';
+
+function ShipmentBarcodeSvg({ code = 'TRK-98214' }) {
+  const chars = String(code).split('');
+  const bars = [];
+  let x = 8;
+  chars.forEach((ch, idx) => {
+    const val = ch.charCodeAt(0) + idx * 7;
+    const w1 = (val % 3) + 1.5;
+    const w2 = ((val >> 2) % 2) + 1;
+    const gap1 = ((val >> 1) % 2) + 1.5;
+    const gap2 = ((val >> 3) % 2) + 2;
+    bars.push({ x, w: w1 });
+    x += w1 + gap1;
+    bars.push({ x, w: w2 });
+    x += w2 + gap2;
+  });
+  bars.push({ x, w: 2.5 });
+  const totalWidth = Math.max(160, x + 10);
+
+  return (
+    <svg viewBox={`0 0 ${totalWidth} 44`} style={{ width: '180px', height: '42px', display: 'block' }} aria-label={`Mã vạch ${code}`}>
+      <rect x="0" y="0" width={totalWidth} height="44" fill="#fff" />
+      {bars.map((b, i) => (
+        <rect key={i} x={b.x} y="4" width={b.w} height="28" fill="#1e1b18" />
+      ))}
+      <text x={totalWidth / 2} y="41" textAnchor="middle" fontSize="9" fontFamily="monospace" fill="#30281b">
+        *{code}*
+      </text>
+    </svg>
+  );
+}
 
 export default function FulfillmentPage() {
   const initialShipments = [
@@ -10,7 +42,7 @@ export default function FulfillmentPage() {
       carrier: 'Giao Hàng Tiết Kiệm (GHTK)',
       customer: 'Sarah Kim',
       destination: 'Quận 1, TP. Hồ Chí Minh',
-      status: 'Out for delivery', // Pending, Packaging, Out for delivery, Delivered
+      status: 'Out for delivery',
       statusText: 'Đang giao hàng',
       statusClass: 'teal',
       createdAt: 'Hôm nay, 08:30',
@@ -67,13 +99,17 @@ export default function FulfillmentPage() {
   ];
 
   const [shipments, setShipments] = useState(initialShipments);
+  const [ordersLookup, setOrdersLookup] = useState([]);
+  const [selectedIds, setSelectedIds] = useState([]);
   const [carrierFilter, setCarrierFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Modals
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [trackingModalItem, setTrackingModalItem] = useState(null);
+  const [printingShipments, setPrintingShipments] = useState([]);
 
   // Form tạo vận đơn mới
   const [newShipment, setNewShipment] = useState({
@@ -85,68 +121,171 @@ export default function FulfillmentPage() {
 
   // Toasts
   const [toasts, setToasts] = useState([]);
-  const showToast = (message, type = 'success') => {
+  const showToast = useCallback((message, type = 'success') => {
     const id = Date.now() + Math.random();
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 3200);
+  }, []);
+
+  const loadShipments = useCallback(async () => {
+    try {
+      const [shipData, orderData] = await Promise.all([
+        api.getShipments(),
+        api.getOrders().catch(() => null),
+      ]);
+      if (Array.isArray(shipData)) {
+        setShipments(shipData);
+      }
+      if (Array.isArray(orderData)) {
+        setOrdersLookup(orderData);
+      }
+    } catch (err) {
+      showToast(err.message || 'Không thể tải danh sách vận đơn', 'error');
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    loadShipments();
+  }, [loadShipments]);
+
+  const handleOrderIdChange = (rawVal) => {
+    const cleaned = rawVal.replace(/^#/, '');
+    const matchedOrder = ordersLookup.find(
+      o => String(o.id).toUpperCase() === cleaned.trim().toUpperCase()
+    );
+    if (matchedOrder) {
+      setNewShipment(prev => ({
+        ...prev,
+        orderId: rawVal,
+        customer: matchedOrder.customer?.name || prev.customer,
+        destination: matchedOrder.address || prev.destination,
+      }));
+    } else {
+      setNewShipment(prev => ({ ...prev, orderId: rawVal }));
+    }
   };
+
+  // Đếm theo từng trạng thái cho dải Tab lọc nhanh
+  const statusTabs = useMemo(() => [
+    { id: 'all', label: 'Tất cả', count: shipments.length },
+    { id: 'Pending', label: 'Chờ lấy hàng', count: shipments.filter(s => s.status === 'Pending').length },
+    { id: 'Packaging', label: 'Đang đóng gói', count: shipments.filter(s => s.status === 'Packaging').length },
+    { id: 'Out for delivery', label: 'Đang giao hàng', count: shipments.filter(s => s.status === 'Out for delivery').length },
+    { id: 'Delivered', label: 'Đã giao', count: shipments.filter(s => s.status === 'Delivered').length },
+  ], [shipments]);
 
   // Lọc
   const filteredShipments = useMemo(() => {
     return shipments.filter(s => {
-      if (carrierFilter !== 'all' && !s.carrier.includes(carrierFilter)) return false;
+      if (carrierFilter !== 'all' && !(s.carrier || '').includes(carrierFilter)) return false;
       if (statusFilter !== 'all' && s.status !== statusFilter) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchTrk = s.id.toLowerCase().includes(q);
-        const matchOrd = s.orderId.toLowerCase().includes(q);
-        const matchCust = s.customer.toLowerCase().includes(q);
-        const matchDest = s.destination.toLowerCase().includes(q);
+        const matchTrk = (s.id || '').toLowerCase().includes(q);
+        const matchOrd = (s.orderId || '').toLowerCase().includes(q);
+        const matchCust = (s.customer || '').toLowerCase().includes(q);
+        const matchDest = (s.destination || '').toLowerCase().includes(q);
         if (!matchTrk && !matchOrd && !matchCust && !matchDest) return false;
       }
       return true;
     });
   }, [shipments, carrierFilter, statusFilter, searchQuery]);
 
-  // Tạo vận đơn
-  const handleCreateShipment = (e) => {
-    e.preventDefault();
-    const randomNum = Math.floor(10000 + Math.random() * 90000);
-    const created = {
-      id: `TRK-${randomNum}`,
-      orderId: newShipment.orderId,
-      carrier: newShipment.carrier,
-      customer: newShipment.customer,
-      destination: newShipment.destination,
-      status: 'Packaging',
-      statusText: 'Đang đóng gói',
-      statusClass: 'amber',
-      createdAt: 'Vừa tạo',
-      eta: '2-3 ngày tới'
-    };
+  // Checkbox hàng loạt
+  const allFilteredSelected = filteredShipments.length > 0 && filteredShipments.every(s => selectedIds.includes(s.id));
 
-    setShipments([created, ...shipments]);
-    setIsAddModalOpen(false);
-    showToast(`Đã tạo thành công vận đơn ${created.id} cho đơn hàng #${created.orderId}!`);
+  const handleToggleSelect = (id) => {
+    setSelectedIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
   };
 
-  // Cập nhật trạng thái
-  const handleAdvanceStatus = (id) => {
-    setShipments(prev => prev.map(s => {
-      if (s.id === id) {
-        if (s.status === 'Pending') {
-          return { ...s, status: 'Packaging', statusText: 'Đang đóng gói', statusClass: 'amber' };
-        } else if (s.status === 'Packaging') {
-          return { ...s, status: 'Out for delivery', statusText: 'Đang giao hàng', statusClass: 'teal' };
-        } else if (s.status === 'Out for delivery') {
-          return { ...s, status: 'Delivered', statusText: 'Đã giao thành công', statusClass: 'green' };
-        }
+  const handleSelectAll = (checked) => {
+    if (checked) {
+      setSelectedIds(filteredShipments.map(s => s.id));
+    } else {
+      setSelectedIds([]);
+    }
+  };
+
+  // Tạo vận đơn
+  const handleCreateShipment = async (e) => {
+    e.preventDefault();
+    if (isSubmitting) return;
+    const payload = {
+      orderId: newShipment.orderId.replace(/^#/, '').trim(),
+      carrier: newShipment.carrier,
+      customer: newShipment.customer.trim(),
+      destination: newShipment.destination.trim()
+    };
+
+    setIsSubmitting(true);
+    try {
+      const created = await api.createShipment(payload);
+      if (created && created.id) {
+        setShipments(prev => [created, ...prev]);
+      } else {
+        await loadShipments();
       }
-      return s;
-    }));
-    showToast('Đã cập nhật tiến độ giao hàng!');
+      setIsAddModalOpen(false);
+      showToast(`Đã tạo thành công vận đơn ${created?.id || ''} cho đơn hàng #${payload.orderId}!`);
+    } catch (err) {
+      showToast(err.message || 'Lỗi khi tạo vận đơn', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Cập nhật trạng thái 1 dòng
+  const handleAdvanceStatus = async (id) => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const updated = await api.advanceShipment(id);
+      if (updated && updated.id) {
+        setShipments(prev => prev.map(s => (s.id === id ? updated : s)));
+      } else {
+        await loadShipments();
+      }
+      showToast('Đã cập nhật tiến độ giao hàng!');
+    } catch (err) {
+      showToast(err.message || 'Lỗi khi cập nhật trạng thái vận đơn', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Chuyển bước giao hàng hàng loạt
+  const handleBulkAdvance = async () => {
+    if (selectedIds.length === 0 || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const result = await api.bulkAdvanceShipments(selectedIds);
+      await loadShipments();
+      const count = result?.advancedCount ?? selectedIds.length;
+      setSelectedIds([]);
+      showToast(`✓ Đã chuyển bước tiến độ cho ${count} vận đơn đã chọn!`);
+    } catch (err) {
+      showToast(err.message || 'Không thể chuyển bước vận đơn hàng loạt', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleBulkPrint = () => {
+    const selected = shipments.filter(s => selectedIds.includes(s.id));
+    if (selected.length === 0) return;
+    setPrintingShipments(selected);
+  };
+
+  const handleExecutePrint = () => {
+    const count = printingShipments.length;
+    try {
+      window.print();
+    } catch {}
+    setPrintingShipments([]);
+    setSelectedIds([]);
+    showToast(`✓ Đã gửi lệnh in ${count} phiếu vận đơn thành công!`);
   };
 
   // Xuất file CSV
@@ -212,29 +351,29 @@ export default function FulfillmentPage() {
       </header>
 
       {/* KPI Cards */}
-      <section className="order-summary-grid" style={{ marginBottom: '20px' }}>
-        <div className="order-summary-card blue">
+      <section className="order-summary-grid" style={{ marginBottom: '16px' }}>
+        <div className="order-summary-card blue" style={{ cursor: 'pointer' }} onClick={() => setStatusFilter('Pending')}>
           <div>
             <small>Chờ lấy hàng</small>
             <strong>{shipments.filter(s => s.status === 'Pending').length}</strong>
             <em>Đã sẵn sàng tại kho</em>
           </div>
         </div>
-        <div className="order-summary-card amber">
+        <div className="order-summary-card amber" style={{ cursor: 'pointer' }} onClick={() => setStatusFilter('Packaging')}>
           <div>
             <small>Đang đóng gói</small>
             <strong>{shipments.filter(s => s.status === 'Packaging').length}</strong>
             <em>Nhân viên kho đang chuẩn bị</em>
           </div>
         </div>
-        <div className="order-summary-card green">
+        <div className="order-summary-card green" style={{ cursor: 'pointer' }} onClick={() => setStatusFilter('Out for delivery')}>
           <div>
             <small>Đang giao trên đường</small>
             <strong>{shipments.filter(s => s.status === 'Out for delivery').length}</strong>
             <em>Shipper đang vận chuyển</em>
           </div>
         </div>
-        <div className="order-summary-card green">
+        <div className="order-summary-card green" style={{ cursor: 'pointer' }} onClick={() => setStatusFilter('Delivered')}>
           <div>
             <small>Giao thành công</small>
             <strong>{shipments.filter(s => s.status === 'Delivered').length}</strong>
@@ -242,6 +381,26 @@ export default function FulfillmentPage() {
           </div>
         </div>
       </section>
+
+      {/* Dải Tab lọc nhanh trạng thái có đếm số lượng */}
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '14px' }} role="tablist" aria-label="Lọc nhanh trạng thái vận đơn">
+        {statusTabs.map(tab => {
+          const active = statusFilter === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              className={active ? 'primary-button' : 'secondary-button'}
+              style={{ padding: '7px 14px', fontSize: '13px', borderRadius: '999px' }}
+              onClick={() => setStatusFilter(tab.id)}
+            >
+              {tab.label} <strong>({tab.count})</strong>
+            </button>
+          );
+        })}
+      </div>
 
       {/* Toolbar */}
       <section className="glass-card c-toolbar">
@@ -258,6 +417,7 @@ export default function FulfillmentPage() {
               <option value="GHN">GHN</option>
               <option value="Viettel">Viettel Post</option>
               <option value="DHL">DHL Express</option>
+              <option value="VNPost">VNPost</option>
             </select>
           </label>
 
@@ -273,6 +433,7 @@ export default function FulfillmentPage() {
               <option value="Packaging">Đang đóng gói</option>
               <option value="Out for delivery">Đang giao hàng</option>
               <option value="Delivered">Đã giao thành công</option>
+              <option value="Delayed">Chậm trễ</option>
             </select>
           </label>
         </div>
@@ -305,10 +466,51 @@ export default function FulfillmentPage() {
           <small>{filteredShipments.length} kiện hàng</small>
         </div>
 
+        {selectedIds.length > 0 && (
+          <div className="c-selection" style={{ marginBottom: '14px', padding: '10px 16px', background: '#f5efe4', borderRadius: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+            <strong style={{ fontSize: '13.5px' }}>Đã chọn {selectedIds.length} kiện hàng vận chuyển</strong>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="primary-button"
+                disabled={isSubmitting}
+                style={{ padding: '6px 12px', fontSize: '12.5px' }}
+                onClick={handleBulkAdvance}
+              >
+                {isSubmitting ? 'Đang xử lý...' : 'Chuyển bước giao hàng hàng loạt'}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                style={{ padding: '6px 12px', fontSize: '12.5px' }}
+                onClick={handleBulkPrint}
+              >
+                In phiếu vận đơn hàng loạt
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                style={{ padding: '6px 12px', fontSize: '12.5px' }}
+                onClick={() => setSelectedIds([])}
+              >
+                Bỏ chọn
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="table-scroll c-table-scroll" tabIndex="0" role="region" aria-label="Bảng vận chuyển">
           <table className="c-table">
             <thead>
               <tr>
+                <th style={{ width: '40px' }}>
+                  <input
+                    type="checkbox"
+                    aria-label="Chọn tất cả vận đơn"
+                    checked={allFilteredSelected}
+                    onChange={e => handleSelectAll(e.target.checked)}
+                  />
+                </th>
                 <th>Mã vận đơn</th>
                 <th>Đơn hàng</th>
                 <th>Đơn vị vận chuyển</th>
@@ -322,7 +524,7 @@ export default function FulfillmentPage() {
             <tbody>
               {filteredShipments.length === 0 ? (
                 <tr>
-                  <td colSpan={8} style={{ textAlign: 'center', padding: '36px 20px', color: '#776c5b' }}>
+                  <td colSpan={9} style={{ textAlign: 'center', padding: '36px 20px', color: '#776c5b' }}>
                     Không có kiện hàng nào phù hợp với bộ lọc hiện tại.
                   </td>
                 </tr>
@@ -330,26 +532,34 @@ export default function FulfillmentPage() {
                 filteredShipments.map(s => (
                   <tr key={s.id}>
                     <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`Chọn vận đơn ${s.id}`}
+                        checked={selectedIds.includes(s.id)}
+                        onChange={() => handleToggleSelect(s.id)}
+                      />
+                    </td>
+                    <td>
                       <strong style={{ fontFamily: 'monospace', color: '#885600', fontSize: '14px' }}>
                         {s.id}
                       </strong>
                     </td>
                     <td>
-                      <Link to="/commerce/orders" style={{ fontWeight: '700', textDecoration: 'underline' }}>
-                        #{s.orderId}
+                      <Link to={`/commerce/orders?search=${encodeURIComponent(String(s.orderId).replace(/^#/, ''))}`} style={{ fontWeight: '700', textDecoration: 'underline' }}>
+                        #{String(s.orderId).replace(/^#/, '')}
                       </Link>
                     </td>
                     <td>{s.carrier}</td>
                     <td><strong>{s.customer}</strong></td>
                     <td><small>{s.destination}</small></td>
                     <td>
-                      <span className={`badge badge-${s.statusClass}`} style={{ fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}>
-                        {s.statusText}
+                      <span className={`badge badge-${s.statusClass || 'teal'}`} style={{ fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}>
+                        {s.statusText || s.status}
                       </span>
                     </td>
                     <td><small>{s.eta}</small></td>
                     <td>
-                      <div style={{ display: 'flex', gap: '6px' }}>
+                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                         <button 
                           type="button" 
                           className="secondary-button"
@@ -358,10 +568,19 @@ export default function FulfillmentPage() {
                         >
                           Hành trình
                         </button>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          style={{ padding: '3px 8px', fontSize: '12px' }}
+                          onClick={() => setPrintingShipments([s])}
+                        >
+                          In phiếu
+                        </button>
                         {s.status !== 'Delivered' && (
                           <button 
                             type="button" 
                             className="primary-button"
+                            disabled={isSubmitting}
                             style={{ padding: '3px 8px', fontSize: '12px' }}
                             onClick={() => handleAdvanceStatus(s.id)}
                           >
@@ -378,6 +597,68 @@ export default function FulfillmentPage() {
         </div>
       </section>
 
+      {/* Modal: In phiếu vận đơn (lẻ & hàng loạt) */}
+      <DialogModal
+        isOpen={printingShipments.length > 0}
+        onClose={() => setPrintingShipments([])}
+        title={`Xem trước Phiếu Vận Đơn (${printingShipments.length} kiện)`}
+        wide={true}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ maxHeight: '420px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            {printingShipments.map(s => (
+              <div
+                key={s.id}
+                style={{
+                  padding: '16px 18px',
+                  background: '#fff',
+                  borderRadius: '12px',
+                  border: '2px dashed #c8b698',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '12px'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #eee2d0', paddingBottom: '10px', flexWrap: 'wrap', gap: '10px' }}>
+                  <div>
+                    <strong style={{ fontSize: '15px', color: '#272016', display: 'block' }}>VEYLIX LOGISTICS · {s.carrier}</strong>
+                    <small style={{ color: '#776c5b' }}>Mã vận đơn: <strong>{s.id}</strong> · Đơn gốc: <strong>#{String(s.orderId).replace(/^#/, '')}</strong></small>
+                  </div>
+                  <ShipmentBarcodeSvg code={s.id} />
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: '13px' }}>
+                  <div style={{ padding: '10px 12px', background: '#faf6ee', borderRadius: '8px' }}>
+                    <small style={{ color: '#776c5b', display: 'block' }}>NGƯỜI GỬI (KHO XUẤT)</small>
+                    <strong>Kho Trung tâm Veylix</strong>
+                    <div style={{ color: '#5c5243' }}>Tầng 12, Bitexco, Quận 1, TP.HCM</div>
+                  </div>
+                  <div style={{ padding: '10px 12px', background: '#faf6ee', borderRadius: '8px' }}>
+                    <small style={{ color: '#776c5b', display: 'block' }}>NGƯỜI NHẬN</small>
+                    <strong>{s.customer}</strong>
+                    <div style={{ color: '#5c5243' }}>{s.destination}</div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12.5px', color: '#685d4f' }}>
+                  <span>Trạng thái hiện tại: <strong>{s.statusText || s.status}</strong></span>
+                  <span>Dự kiến giao: <strong>{s.eta || 'Tiêu chuẩn'}</strong></span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+            <button type="button" className="secondary-button" onClick={() => setPrintingShipments([])}>
+              Đóng
+            </button>
+            <button type="button" className="primary-button" onClick={handleExecutePrint}>
+              🖨️ In phiếu ngay
+            </button>
+          </div>
+        </div>
+      </DialogModal>
+
       {/* Modal: Tạo vận đơn */}
       <DialogModal
         isOpen={isAddModalOpen}
@@ -387,15 +668,16 @@ export default function FulfillmentPage() {
         <form onSubmit={handleCreateShipment} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           <div>
             <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '600' }}>
-              Mã đơn hàng liên kết
+              Mã đơn hàng liên kết *
             </label>
             <input 
               type="text" 
               required
               className="c-field"
+              placeholder="VD: SF83291"
               style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
               value={newShipment.orderId}
-              onChange={e => setNewShipment({ ...newShipment, orderId: e.target.value })}
+              onChange={e => handleOrderIdChange(e.target.value)}
             />
           </div>
 
@@ -413,17 +695,33 @@ export default function FulfillmentPage() {
               <option value="Giao Hàng Nhanh (GHN)">Giao Hàng Nhanh (GHN)</option>
               <option value="Viettel Post">Viettel Post</option>
               <option value="DHL Express">DHL Express</option>
+              <option value="VNPost">VNPost</option>
             </select>
           </div>
 
           <div>
             <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '600' }}>
-              Người nhận & Địa chỉ giao
+              Tên người nhận
+            </label>
+            <input 
+              type="text" 
+              className="c-field"
+              placeholder="Tự động lấy từ đơn hàng nếu để trống"
+              style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
+              value={newShipment.customer}
+              onChange={e => setNewShipment({ ...newShipment, customer: e.target.value })}
+            />
+          </div>
+
+          <div>
+            <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '600' }}>
+              Địa chỉ giao nhận *
             </label>
             <input 
               type="text" 
               required
               className="c-field"
+              placeholder="VD: Quận 1, TP. Hồ Chí Minh"
               style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
               value={newShipment.destination}
               onChange={e => setNewShipment({ ...newShipment, destination: e.target.value })}
@@ -434,8 +732,8 @@ export default function FulfillmentPage() {
             <button type="button" className="secondary-button" onClick={() => setIsAddModalOpen(false)}>
               Hủy
             </button>
-            <button type="submit" className="primary-button">
-              Phát hành vận đơn
+            <button type="submit" className="primary-button" disabled={isSubmitting}>
+              {isSubmitting ? 'Đang phát hành...' : 'Phát hành vận đơn'}
             </button>
           </div>
         </form>
@@ -451,13 +749,13 @@ export default function FulfillmentPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', fontSize: '14px' }}>
             <div style={{ padding: '12px 16px', background: '#f6f0e4', borderRadius: '10px' }}>
               <strong>Đơn vị vận chuyển:</strong> {trackingModalItem.carrier}<br />
-              <strong>Đơn hàng:</strong> #{trackingModalItem.orderId} · <strong>Người nhận:</strong> {trackingModalItem.customer}
+              <strong>Đơn hàng:</strong> #{String(trackingModalItem.orderId).replace(/^#/, '')} · <strong>Người nhận:</strong> {trackingModalItem.customer}
             </div>
 
             <div style={{ borderLeft: '3px solid #10b981', paddingLeft: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div>
                 <strong style={{ color: '#10b981' }}>● {trackingModalItem.statusText}</strong>
-                <p style={{ margin: '2px 0 0 0', fontSize: '13px', color: '#685d4f' }}>Kiện hàng đang tại bưu cục trung chuyển đích.</p>
+                <p style={{ margin: '2px 0 0 0', fontSize: '13px', color: '#685d4f' }}>Kiện hàng đang tại bưu cục trung chuyển đích ({trackingModalItem.destination}).</p>
               </div>
               <div>
                 <strong>● Xuất kho đóng gói hoàn tất</strong>
@@ -469,7 +767,18 @@ export default function FulfillmentPage() {
               </div>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => {
+                  const item = trackingModalItem;
+                  setTrackingModalItem(null);
+                  setPrintingShipments([item]);
+                }}
+              >
+                🖨️ In phiếu vận đơn
+              </button>
               <button type="button" className="primary-button" onClick={() => setTrackingModalItem(null)}>
                 Đóng
               </button>
@@ -481,7 +790,7 @@ export default function FulfillmentPage() {
       {/* Toasts */}
       <div className="toasts-container" style={{ position: 'fixed', bottom: '24px', right: '24px', zIndex: 99999, display: 'flex', flexDirection: 'column', gap: '8px' }}>
         {toasts.map(t => (
-          <div key={t.id} style={{ background: '#27342b', color: '#fff', padding: '10px 18px', borderRadius: '10px', fontSize: '13px' }}>
+          <div key={t.id} style={{ background: t.type === 'error' ? '#8a2323' : '#27342b', color: '#fff', padding: '10px 18px', borderRadius: '10px', fontSize: '13px' }}>
             {t.message}
           </div>
         ))}

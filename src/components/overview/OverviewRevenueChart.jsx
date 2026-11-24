@@ -1,10 +1,7 @@
-import React, { useState } from 'react';
+import React from 'react';
 
-export default function OverviewRevenueChart() {
-  const [activeRange, setActiveRange] = useState('30');
-
-  // Mẫu dữ liệu đường cong doanh thu
-  const points = [
+export default function OverviewRevenueChart({ data, activeRange = '30', onRangeChange }) {
+  const defaultPoints = [
     { label: '01 Th4', val1: 42, val2: 30 },
     { label: '05 Th4', val1: 58, val2: 45 },
     { label: '10 Th4', val1: 52, val2: 50 },
@@ -14,15 +11,19 @@ export default function OverviewRevenueChart() {
     { label: '30 Th4', val1: 110, val2: 85 },
   ];
 
-  const maxVal = 120;
+  const points = Array.isArray(data?.points) && data.points.length > 0 ? data.points : defaultPoints;
+  const maxPointVal = Math.max(10, ...points.flatMap(p => [Number(p.val1) || 0, Number(p.val2) || 0]));
+  const maxVal = maxPointVal * 1.1;
   const width = 360;
   const height = 160;
 
   // Tính tọa độ SVG polyline
   const makePoints = (key) => {
     return points.map((p, i) => {
-      const x = (i / (points.length - 1)) * (width - 40) + 20;
-      const y = height - (p[key] / maxVal) * (height - 30) - 15;
+      const ratioX = points.length > 1 ? i / (points.length - 1) : 0.5;
+      const x = ratioX * (width - 40) + 20;
+      const val = Number(p[key]) || 0;
+      const y = height - (val / maxVal) * (height - 30) - 15;
       return `${x},${y}`;
     }).join(' ');
   };
@@ -44,14 +45,14 @@ export default function OverviewRevenueChart() {
           <button 
             type="button" 
             className={`pill ${activeRange === '7' ? 'active' : ''}`}
-            onClick={() => setActiveRange('7')}
+            onClick={() => onRangeChange && onRangeChange('7')}
           >
             7 ngày
           </button>
           <button 
             type="button" 
             className={`pill ${activeRange === '30' ? 'active' : ''}`}
-            onClick={() => setActiveRange('30')}
+            onClick={() => onRangeChange && onRangeChange('30')}
           >
             30 ngày
           </button>
@@ -86,8 +87,9 @@ export default function OverviewRevenueChart() {
 
           {/* Các chấm mốc */}
           {points.map((p, i) => {
-            const x = (i / (points.length - 1)) * (width - 40) + 20;
-            const y = height - (p.val1 / maxVal) * (height - 30) - 15;
+            const ratioX = points.length > 1 ? i / (points.length - 1) : 0.5;
+            const x = ratioX * (width - 40) + 20;
+            const y = height - ((Number(p.val1) || 0) / maxVal) * (height - 30) - 15;
             return (
               <circle
                 key={i}
@@ -113,4 +115,3 @@ export default function OverviewRevenueChart() {
     </section>
   );
 }
-

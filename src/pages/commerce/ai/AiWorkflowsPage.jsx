@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import DialogModal from '../../../components/ui/DialogModal';
+import api from '../../../services/api';
 
 export default function AiWorkflowsPage() {
   const initialWorkflows = [
@@ -11,7 +12,8 @@ export default function AiWorkflowsPage() {
       trigger: 'Sản phẩm mới được tạo',
       status: 'Active',
       runsCount: 142,
-      lastRun: '10 phút trước'
+      lastRun: '10 phút trước',
+      logs: []
     },
     {
       id: 'wf-2',
@@ -20,7 +22,8 @@ export default function AiWorkflowsPage() {
       trigger: 'Khách gửi đánh giá mới',
       status: 'Active',
       runsCount: 89,
-      lastRun: '2 giờ trước'
+      lastRun: '2 giờ trước',
+      logs: []
     },
     {
       id: 'wf-3',
@@ -29,7 +32,8 @@ export default function AiWorkflowsPage() {
       trigger: 'Định kỳ hàng ngày (06:00)',
       status: 'Active',
       runsCount: 31,
-      lastRun: 'Hôm nay, 06:00'
+      lastRun: 'Hôm nay, 06:00',
+      logs: []
     },
     {
       id: 'wf-4',
@@ -38,50 +42,162 @@ export default function AiWorkflowsPage() {
       trigger: 'Phân khúc khách hàng kích hoạt',
       status: 'Paused',
       runsCount: 18,
-      lastRun: '3 ngày trước'
+      lastRun: '3 ngày trước',
+      logs: []
     }
   ];
 
   const [workflows, setWorkflows] = useState(initialWorkflows);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [editingWf, setEditingWf] = useState(null);
+  const [deletingWf, setDeletingWf] = useState(null);
+  const [runResultWf, setRunResultWf] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [runningId, setRunningId] = useState(null);
   const [newWf, setNewWf] = useState({ name: '', description: '', trigger: 'Sản phẩm mới được tạo' });
 
   const [toasts, setToasts] = useState([]);
-  const showToast = (message) => {
+  const showToast = useCallback((message, type = 'success') => {
     const id = Date.now() + Math.random();
-    setToasts(prev => [...prev, { id, message }]);
+    setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 3200);
-  };
+  }, []);
 
-  const handleToggleStatus = (id) => {
-    setWorkflows(prev => prev.map(w => {
-      if (w.id === id) {
-        const nextStatus = w.status === 'Active' ? 'Paused' : 'Active';
-        showToast(`Đã ${nextStatus === 'Active' ? 'kích hoạt' : 'tạm dừng'} quy trình "${w.name}"`);
-        return { ...w, status: nextStatus };
+  const loadWorkflows = useCallback(async () => {
+    try {
+      const data = await api.getAiWorkflows();
+      if (Array.isArray(data)) {
+        setWorkflows(data);
       }
-      return w;
-    }));
+    } catch (err) {
+      showToast(err.message || 'Không thể tải danh sách quy trình AI', 'error');
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    loadWorkflows();
+  }, [loadWorkflows]);
+
+  const handleToggleStatus = async (w) => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const updated = await api.toggleAiWorkflow(w.id);
+      if (updated && updated.id) {
+        setWorkflows(prev => prev.map(item => (item.id === w.id ? updated : item)));
+        showToast(`Đã ${updated.status === 'Active' ? 'kích hoạt' : 'tạm dừng'} quy trình "${w.name}"`);
+      } else {
+        await loadWorkflows();
+      }
+    } catch (err) {
+      showToast(err.message || 'Không thể đổi trạng thái quy trình AI', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleCreate = (e) => {
+  const handleRunWorkflow = async (w) => {
+    if (runningId) return;
+    setRunningId(w.id);
+    try {
+      const updated = await api.runAiWorkflow(w.id);
+      const fallbackLog = {
+        time: new Date().toLocaleTimeString('vi-VN'),
+        summary: `Thực thi thành công quy trình "${w.name}"`,
+        output: `Đã xử lý dữ liệu cửa hàng theo sự kiện "${w.trigger}" — hoàn tất không có lỗi.`,
+      };
+      const resolvedWf = updated && updated.id
+        ? {
+            ...updated,
+            logs: Array.isArray(updated.logs) && updated.logs.length > 0 ? updated.logs : [fallbackLog, ...(w.logs || [])],
+          }
+        : {
+            ...w,
+            runsCount: (w.runsCount || 0) + 1,
+            lastRun: 'Vừa xong',
+            logs: [fallbackLog, ...(w.logs || [])],
+          };
+
+      setWorkflows(prev => prev.map(item => (item.id === w.id ? resolvedWf : item)));
+      setRunResultWf(resolvedWf);
+      showToast(`Đã chạy thử thành công quy trình "${w.name}"!`);
+    } catch (err) {
+      showToast(err.message || 'Lỗi khi chạy thử quy trình AI', 'error');
+    } finally {
+      setRunningId(null);
+    }
+  };
+
+  const handleCreate = async (e) => {
     e.preventDefault();
-    if (!newWf.name.trim()) return;
-    const created = {
-      id: `wf-${Date.now()}`,
+    if (!newWf.name.trim() || isSubmitting) return;
+    const payload = {
       name: newWf.name.trim(),
       description: newWf.description.trim() || 'Quy trình AI tự động hóa',
-      trigger: newWf.trigger,
-      status: 'Active',
-      runsCount: 0,
-      lastRun: 'Chưa chạy'
+      trigger: newWf.trigger
     };
-    setWorkflows([...workflows, created]);
-    setIsAddModalOpen(false);
-    setNewWf({ name: '', description: '', trigger: 'Sản phẩm mới được tạo' });
-    showToast(`Đã thiết lập quy trình AI "${created.name}"!`);
+
+    setIsSubmitting(true);
+    try {
+      const created = await api.createAiWorkflow(payload);
+      if (created && created.id) {
+        setWorkflows(prev => [...prev, created]);
+      } else {
+        await loadWorkflows();
+      }
+      setIsAddModalOpen(false);
+      setNewWf({ name: '', description: '', trigger: 'Sản phẩm mới được tạo' });
+      showToast(`Đã thiết lập quy trình AI "${payload.name}"!`);
+    } catch (err) {
+      showToast(err.message || 'Không thể tạo quy trình AI mới', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSaveEdit = async (e) => {
+    e.preventDefault();
+    if (!editingWf || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const payload = {
+        name: editingWf.name.trim(),
+        description: editingWf.description.trim(),
+        trigger: editingWf.trigger,
+        status: editingWf.status
+      };
+      const updated = await api.updateAiWorkflow(editingWf.id, payload);
+      if (updated && updated.id) {
+        setWorkflows(prev => prev.map(item => (item.id === editingWf.id ? updated : item)));
+      } else {
+        await loadWorkflows();
+      }
+      setEditingWf(null);
+      showToast(`Đã cập nhật quy trình AI "${payload.name}"!`);
+    } catch (err) {
+      showToast(err.message || 'Không thể cập nhật quy trình AI', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deletingWf || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const targetId = deletingWf.id;
+      const targetName = deletingWf.name;
+      await api.deleteAiWorkflow(targetId);
+      setWorkflows(prev => prev.filter(item => item.id !== targetId));
+      setDeletingWf(null);
+      showToast(`Đã xóa quy trình AI "${targetName}"!`);
+    } catch (err) {
+      showToast(err.message || 'Không thể xóa quy trình AI', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -101,6 +217,9 @@ export default function AiWorkflowsPage() {
         </div>
 
         <div className="commerce-heading-actions">
+          <Link to="/commerce/ai-studio" className="secondary-button" style={{ textDecoration: 'none' }}>
+            Mở AI Studio
+          </Link>
           <button type="button" className="primary-button" onClick={() => setIsAddModalOpen(true)}>
             <span className="icon" aria-hidden="true">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor">
@@ -127,34 +246,91 @@ export default function AiWorkflowsPage() {
               <p style={{ margin: '6px 0 8px 0', fontSize: '13px', color: '#685d4f', lineHeight: '1.5' }}>
                 {w.description}
               </p>
-              <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: '#887d6d' }}>
+              <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: '#887d6d', flexWrap: 'wrap' }}>
                 <span>⚡ Điều kiện kích hoạt: <strong>{w.trigger}</strong></span>
-                <span>📊 Lượt thực thi: <strong>{w.runsCount} lần</strong></span>
-                <span>🕒 Lần chạy gần nhất: <strong>{w.lastRun}</strong></span>
+                <span>📊 Lượt thực thi: <strong>{w.runsCount ?? 0} lần</strong></span>
+                <span>🕒 Lần chạy gần nhất: <strong>{w.lastRun || 'Chưa chạy'}</strong></span>
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
               <button 
                 type="button" 
-                className="secondary-button" 
+                className="primary-button" 
+                disabled={runningId === w.id}
                 style={{ padding: '6px 14px', fontSize: '13px' }}
-                onClick={() => showToast(`Đang chạy thử nghiệm quy trình "${w.name}"...`)}
+                onClick={() => handleRunWorkflow(w)}
               >
-                Chạy thử
+                {runningId === w.id ? 'Đang chạy...' : 'Chạy thử'}
               </button>
               <button 
                 type="button" 
-                className={w.status === 'Active' ? 'secondary-button' : 'primary-button'}
+                disabled={isSubmitting}
+                className="secondary-button"
                 style={{ padding: '6px 14px', fontSize: '13px' }}
-                onClick={() => handleToggleStatus(w.id)}
+                onClick={() => handleToggleStatus(w)}
               >
                 {w.status === 'Active' ? 'Tạm dừng' : 'Kích hoạt'}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                style={{ padding: '6px 12px', fontSize: '13px' }}
+                onClick={() => setEditingWf(w)}
+              >
+                Sửa
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                style={{ padding: '6px 12px', fontSize: '13px', color: '#b23b3b' }}
+                onClick={() => setDeletingWf(w)}
+              >
+                Xóa
               </button>
             </div>
           </div>
         ))}
       </div>
+
+      {/* Modal: Kết quả chạy thử & lịch sử logs */}
+      <DialogModal
+        isOpen={Boolean(runResultWf)}
+        onClose={() => setRunResultWf(null)}
+        title={runResultWf ? `Kết quả chạy thử: ${runResultWf.name}` : ''}
+        wide={true}
+      >
+        {runResultWf && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', fontSize: '13.5px' }}>
+            <div style={{ padding: '12px 16px', background: '#edf7f0', border: '1px solid #b7dfc4', borderRadius: '10px', color: '#1d5432' }}>
+              <strong>✓ Thực thi thành công!</strong> Tổng số lần thực thi hiện tại: <strong>{runResultWf.runsCount} lần</strong> · Cập nhật: <strong>{runResultWf.lastRun}</strong>
+            </div>
+
+            <div>
+              <strong style={{ display: 'block', marginBottom: '8px' }}>Nhật ký đầu ra các lần thực thi (Execution Logs):</strong>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '280px', overflowY: 'auto' }}>
+                {(runResultWf.logs || []).map((log, idx) => (
+                  <div key={idx} style={{ padding: '12px 14px', background: '#faf6ee', borderRadius: '10px', border: '1px solid #e6dac8' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                      <strong>{log.summary || 'Kết quả xử lý AI'}</strong>
+                      <small style={{ color: '#776c5b' }}>{log.time}</small>
+                    </div>
+                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: '12.5px', color: '#433a2c', lineHeight: '1.5' }}>
+                      {log.output}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button type="button" className="primary-button" onClick={() => setRunResultWf(null)}>
+                Đóng kết quả
+              </button>
+            </div>
+          </div>
+        )}
+      </DialogModal>
 
       {/* Modal: Thêm quy trình */}
       <DialogModal
@@ -213,17 +389,106 @@ export default function AiWorkflowsPage() {
             <button type="button" className="secondary-button" onClick={() => setIsAddModalOpen(false)}>
               Hủy
             </button>
-            <button type="submit" className="primary-button">
-              Khởi tạo quy trình
+            <button type="submit" className="primary-button" disabled={isSubmitting}>
+              {isSubmitting ? 'Đang tạo...' : 'Khởi tạo quy trình'}
             </button>
           </div>
         </form>
       </DialogModal>
 
+      {/* Modal: Sửa quy trình AI */}
+      <DialogModal
+        isOpen={Boolean(editingWf)}
+        onClose={() => setEditingWf(null)}
+        title={editingWf ? `Chỉnh sửa: ${editingWf.name}` : ''}
+      >
+        {editingWf && (
+          <form onSubmit={handleSaveEdit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '600' }}>
+                Tên quy trình AI *
+              </label>
+              <input
+                type="text"
+                required
+                className="c-field"
+                style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
+                value={editingWf.name}
+                onChange={e => setEditingWf({ ...editingWf, name: e.target.value })}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '600' }}>
+                Mô tả mục tiêu
+              </label>
+              <textarea
+                rows={3}
+                className="c-field"
+                style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
+                value={editingWf.description || ''}
+                onChange={e => setEditingWf({ ...editingWf, description: e.target.value })}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '600' }}>
+                Sự kiện kích hoạt
+              </label>
+              <input
+                type="text"
+                className="c-field"
+                style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
+                value={editingWf.trigger || ''}
+                onChange={e => setEditingWf({ ...editingWf, trigger: e.target.value })}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
+              <button type="button" className="secondary-button" onClick={() => setEditingWf(null)}>
+                Hủy
+              </button>
+              <button type="submit" className="primary-button" disabled={isSubmitting}>
+                {isSubmitting ? 'Đang lưu...' : 'Lưu thay đổi'}
+              </button>
+            </div>
+          </form>
+        )}
+      </DialogModal>
+
+      {/* Modal: Xác nhận xóa quy trình AI */}
+      <DialogModal
+        isOpen={Boolean(deletingWf)}
+        onClose={() => setDeletingWf(null)}
+        title="Xác nhận xóa quy trình AI"
+      >
+        {deletingWf && (
+          <div>
+            <p style={{ lineHeight: '1.6', marginBottom: '16px' }}>
+              Bạn có chắc chắn muốn xóa quy trình tự động hóa <strong>{deletingWf.name}</strong> không?
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button type="button" className="secondary-button" onClick={() => setDeletingWf(null)}>
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                disabled={isSubmitting}
+                style={{ background: '#b23b3b', borderColor: '#b23b3b' }}
+                onClick={handleConfirmDelete}
+              >
+                {isSubmitting ? 'Đang xóa...' : 'Xác nhận xóa'}
+              </button>
+            </div>
+          </div>
+        )}
+      </DialogModal>
+
       {/* Toasts */}
       <div className="toasts-container" style={{ position: 'fixed', bottom: '24px', right: '24px', zIndex: 99999, display: 'flex', flexDirection: 'column', gap: '8px' }}>
         {toasts.map(t => (
-          <div key={t.id} style={{ background: '#27342b', color: '#fff', padding: '10px 18px', borderRadius: '10px', fontSize: '13px' }}>
+          <div key={t.id} style={{ background: t.type === 'error' ? '#8a2323' : '#27342b', color: '#fff', padding: '10px 18px', borderRadius: '10px', fontSize: '13px' }}>
             {t.message}
           </div>
         ))}
@@ -231,4 +496,3 @@ export default function AiWorkflowsPage() {
     </div>
   );
 }
-

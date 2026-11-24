@@ -1,14 +1,16 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import CustomerHeading from '../../../components/commerce/customers/CustomerHeading';
 import CustomerSummaryCards from '../../../components/commerce/customers/CustomerSummaryCards';
 import CustomerToolbar from '../../../components/commerce/customers/CustomerToolbar';
 import CustomerTable from '../../../components/commerce/customers/CustomerTable';
 import DialogModal from '../../../components/ui/DialogModal';
 import { initialCustomers } from '../../../data/mockCustomers';
+import api from '../../../services/api';
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState(initialCustomers);
   const [selectedIds, setSelectedIds] = useState([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Bộ lọc
   const [segmentFilter, setSegmentFilter] = useState('all');
@@ -20,6 +22,14 @@ export default function CustomersPage() {
   const [viewingCustomer, setViewingCustomer] = useState(null);
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [deletingCustomer, setDeletingCustomer] = useState(null);
+  const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState(false);
+  const [isBulkEmailModalOpen, setIsBulkEmailModalOpen] = useState(false);
+
+  // Form gửi email hàng loạt
+  const [emailForm, setEmailForm] = useState({
+    subject: 'Ưu đãi đặc quyền dành riêng cho khách hàng thân thiết Veylix Studio',
+    content: 'Xin chào quý khách,\n\nCảm ơn bạn đã đồng hành cùng Veylix Studio. Nhập ngay mã ưu đãi HELLO10 khi mua sắm trực tuyến tại cửa hàng của chúng tôi để nhận chiết khấu 10% cho bộ sưu tập mới nhất!\n\nTrân trọng,\nĐội ngũ Veylix Studio'
+  });
 
   // Form thêm khách hàng mới
   const [newCust, setNewCust] = useState({
@@ -33,13 +43,28 @@ export default function CustomersPage() {
 
   // Toasts
   const [toasts, setToasts] = useState([]);
-  const showToast = (message, type = 'success') => {
+  const showToast = useCallback((message, type = 'success') => {
     const id = Date.now() + Math.random();
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 3200);
-  };
+  }, []);
+
+  const loadCustomers = useCallback(async () => {
+    try {
+      const data = await api.getCustomers();
+      if (Array.isArray(data)) {
+        setCustomers(data);
+      }
+    } catch (err) {
+      showToast(err.message || 'Không thể tải danh sách khách hàng', 'error');
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    loadCustomers();
+  }, [loadCustomers]);
 
   // Lọc realtime
   const filteredCustomers = useMemo(() => {
@@ -48,10 +73,10 @@ export default function CustomersPage() {
       if (marketingFilter !== 'all' && c.marketing !== marketingFilter) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchName = c.name.toLowerCase().includes(q);
-        const matchEmail = c.email.toLowerCase().includes(q);
-        const matchPhone = c.phone?.toLowerCase().includes(q);
-        const matchLoc = c.location?.toLowerCase().includes(q);
+        const matchName = (c.name || '').toLowerCase().includes(q);
+        const matchEmail = (c.email || '').toLowerCase().includes(q);
+        const matchPhone = (c.phone || '').toLowerCase().includes(q);
+        const matchLoc = (c.location || '').toLowerCase().includes(q);
         if (!matchName && !matchEmail && !matchPhone && !matchLoc) return false;
       }
       return true;
@@ -79,15 +104,55 @@ export default function CustomersPage() {
 
   // Batch actions
   const handleBulkEmail = () => {
-    showToast(`Đã chuẩn bị chiến dịch gửi email cho ${selectedIds.length} khách hàng!`);
-    setSelectedIds([]);
+    if (selectedIds.length === 0) return;
+    setIsBulkEmailModalOpen(true);
+  };
+
+  const handleSendBulkEmail = async (e) => {
+    e.preventDefault();
+    if (isSubmitting || selectedIds.length === 0) return;
+    if (!emailForm.subject.trim() || !emailForm.content.trim()) {
+      showToast('Vui lòng nhập đầy đủ tiêu đề và nội dung email!', 'error');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const res = await api.bulkEmailCustomers({
+        ids: selectedIds,
+        subject: emailForm.subject.trim(),
+        content: emailForm.content.trim(),
+      });
+      const count = res?.sentCount ?? selectedIds.length;
+      setIsBulkEmailModalOpen(false);
+      setSelectedIds([]);
+      showToast(`Đã gửi thành công chiến dịch email tới ${count} khách hàng!`);
+    } catch (err) {
+      showToast(err.message || 'Không thể gửi email hàng loạt', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleBulkDelete = () => {
-    if (window.confirm(`Bạn có chắc muốn xóa ${selectedIds.length} khách hàng đã chọn không?`)) {
-      setCustomers(prev => prev.filter(c => !selectedIds.includes(c.id)));
-      showToast(`Đã xóa thành công ${selectedIds.length} khách hàng.`);
+    if (selectedIds.length === 0) return;
+    setIsBulkDeleteModalOpen(true);
+  };
+
+  const handleConfirmBulkDelete = async () => {
+    if (selectedIds.length === 0 || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const count = selectedIds.length;
+      await api.bulkDeleteCustomers(selectedIds);
+      await loadCustomers();
       setSelectedIds([]);
+      setIsBulkDeleteModalOpen(false);
+      showToast(`Đã xóa thành công ${count} khách hàng.`);
+    } catch (err) {
+      showToast(err.message || 'Lỗi khi xóa khách hàng hàng loạt', 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -100,8 +165,8 @@ export default function CustomersPage() {
       `"${c.phone || ''}"`,
       `"${c.segment}"`,
       c.ordersCount,
-      c.totalSpent.toFixed(2),
-      c.aov.toFixed(2),
+      Number(c.totalSpent || 0).toFixed(2),
+      Number(c.aov || 0).toFixed(2),
       `"${c.location}"`,
       `"${c.marketing}"`,
       `"${c.lastOrder}"`
@@ -119,64 +184,94 @@ export default function CustomersPage() {
   };
 
   // Thêm khách hàng mới
-  const handleCreateCustomer = (e) => {
+  const handleCreateCustomer = async (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!newCust.name.trim() || !newCust.email.trim()) {
       showToast('Vui lòng nhập đầy đủ tên và email khách hàng!', 'error');
       return;
     }
 
-    const initials = newCust.name
-      .split(' ')
-      .map(part => part[0])
-      .join('')
-      .substring(0, 2)
-      .toUpperCase();
-
-    const created = {
-      id: `cust-${Date.now()}`,
+    const payload = {
       name: newCust.name.trim(),
       email: newCust.email.trim(),
       phone: newCust.phone.trim(),
-      avatar: initials || 'KH',
-      segment: newCust.segment,
-      ordersCount: 0,
-      totalSpent: 0,
-      aov: 0,
-      lastOrder: 'Chưa có đơn hàng',
       location: newCust.location,
-      marketing: newCust.marketing,
-      status: 'Active'
+      segment: newCust.segment,
+      marketing: newCust.marketing
     };
 
-    setCustomers([created, ...customers]);
-    setIsAddModalOpen(false);
-    setNewCust({
-      name: '',
-      email: '',
-      phone: '',
-      location: 'TP. Hồ Chí Minh, Việt Nam',
-      segment: 'Khách mới',
-      marketing: 'Đã đăng ký'
-    });
-    showToast(`Đã thêm khách hàng ${created.name} thành công!`);
+    setIsSubmitting(true);
+    try {
+      const created = await api.createCustomer(payload);
+      if (created && created.id) {
+        setCustomers(prev => [created, ...prev]);
+      } else {
+        await loadCustomers();
+      }
+      setIsAddModalOpen(false);
+      setNewCust({
+        name: '',
+        email: '',
+        phone: '',
+        location: 'TP. Hồ Chí Minh, Việt Nam',
+        segment: 'Khách mới',
+        marketing: 'Đã đăng ký'
+      });
+      showToast(`Đã thêm khách hàng ${payload.name} thành công!`);
+    } catch (err) {
+      showToast(err.message || 'Không thể thêm khách hàng', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Lưu chỉnh sửa thông tin khách hàng
-  const handleSaveEdit = (e) => {
+  const handleSaveEdit = async (e) => {
     e.preventDefault();
-    if (!editingCustomer) return;
-    setCustomers(prev => prev.map(c => c.id === editingCustomer.id ? editingCustomer : c));
-    setEditingCustomer(null);
-    showToast(`Đã lưu thông tin khách hàng ${editingCustomer.name}!`);
+    if (!editingCustomer || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const payload = {
+        name: editingCustomer.name.trim(),
+        email: editingCustomer.email.trim(),
+        phone: editingCustomer.phone || '',
+        location: editingCustomer.location || '',
+        segment: editingCustomer.segment,
+        marketing: editingCustomer.marketing
+      };
+      const updated = await api.updateCustomer(editingCustomer.id, payload);
+      if (updated && updated.id) {
+        setCustomers(prev => prev.map(c => (c.id === editingCustomer.id ? updated : c)));
+      } else {
+        await loadCustomers();
+      }
+      setEditingCustomer(null);
+      showToast(`Đã lưu thông tin khách hàng ${payload.name}!`);
+    } catch (err) {
+      showToast(err.message || 'Không thể cập nhật thông tin khách hàng', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  // Xóa khách hàng
-  const handleConfirmDelete = () => {
-    if (!deletingCustomer) return;
-    setCustomers(prev => prev.filter(c => c.id !== deletingCustomer.id));
-    setDeletingCustomer(null);
-    showToast(`Đã xóa khách hàng ${deletingCustomer.name}!`);
+  // Xóa khách hàng lẻ
+  const handleConfirmDelete = async () => {
+    if (!deletingCustomer || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const targetId = deletingCustomer.id;
+      const targetName = deletingCustomer.name;
+      await api.deleteCustomer(targetId);
+      setCustomers(prev => prev.filter(c => c.id !== targetId));
+      setSelectedIds(prev => prev.filter(id => id !== targetId));
+      setDeletingCustomer(null);
+      showToast(`Đã xóa khách hàng ${targetName}!`);
+    } catch (err) {
+      showToast(err.message || 'Không thể xóa khách hàng', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -209,6 +304,105 @@ export default function CustomersPage() {
         onEditCustomer={setEditingCustomer}
         onDeleteCustomer={setDeletingCustomer}
       />
+
+      {/* Modal: Gửi email hàng loạt */}
+      <DialogModal
+        isOpen={isBulkEmailModalOpen}
+        onClose={() => setIsBulkEmailModalOpen(false)}
+        title={`Gửi chiến dịch Email hàng loạt (${selectedIds.length} khách hàng)`}
+        wide={true}
+      >
+        <form onSubmit={handleSendBulkEmail} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="secondary-button"
+              style={{ padding: '4px 10px', fontSize: '12px' }}
+              onClick={() => setEmailForm({
+                subject: 'Ưu đãi đặc quyền 10% từ Veylix Studio',
+                content: 'Xin chào quý khách,\n\nNhập ngay mã HELLO10 tại cửa hàng trực tuyến Veylix để nhận ưu đãi 10% cho đơn hàng tiếp theo của bạn!'
+              })}
+            >
+              Mẫu ưu đãi 10%
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              style={{ padding: '4px 10px', fontSize: '12px' }}
+              onClick={() => setEmailForm({
+                subject: 'Ra mắt Bộ sưu tập Tối giản Mới — Miễn phí giao hàng',
+                content: 'Chào bạn,\n\nVeylix vừa ra mắt các thiết kế mới nhất trong tuần này. Áp dụng mã SHIPFREE để được miễn phí vận chuyển toàn quốc!'
+              })}
+            >
+              Mẫu ra mắt BST mới
+            </button>
+          </div>
+
+          <div>
+            <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '600' }}>
+              Tiêu đề Email (Subject) *
+            </label>
+            <input
+              type="text"
+              required
+              className="c-field"
+              style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
+              value={emailForm.subject}
+              onChange={e => setEmailForm({ ...emailForm, subject: e.target.value })}
+            />
+          </div>
+
+          <div>
+            <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '600' }}>
+              Nội dung thông điệp *
+            </label>
+            <textarea
+              required
+              rows={5}
+              className="c-field"
+              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
+              value={emailForm.content}
+              onChange={e => setEmailForm({ ...emailForm, content: e.target.value })}
+            />
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '6px' }}>
+            <button type="button" className="secondary-button" onClick={() => setIsBulkEmailModalOpen(false)}>
+              Hủy
+            </button>
+            <button type="submit" className="primary-button" disabled={isSubmitting}>
+              {isSubmitting ? 'Đang gửi chiến dịch...' : `Gửi ngay (${selectedIds.length} người nhận)`}
+            </button>
+          </div>
+        </form>
+      </DialogModal>
+
+      {/* Modal: Xác nhận xóa khách hàng hàng loạt */}
+      <DialogModal
+        isOpen={isBulkDeleteModalOpen}
+        onClose={() => setIsBulkDeleteModalOpen(false)}
+        title="Xác nhận xóa khách hàng đã chọn"
+      >
+        <div>
+          <p style={{ marginBottom: '16px', lineHeight: '1.6' }}>
+            Bạn có chắc chắn muốn xóa <strong>{selectedIds.length} hồ sơ khách hàng</strong> đã chọn khỏi danh sách quản lý không?
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+            <button type="button" className="secondary-button" onClick={() => setIsBulkDeleteModalOpen(false)}>
+              Hủy bỏ
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              disabled={isSubmitting}
+              style={{ background: '#b23b3b', borderColor: '#b23b3b', color: '#fff' }}
+              onClick={handleConfirmBulkDelete}
+            >
+              {isSubmitting ? 'Đang xóa...' : `Xác nhận xóa (${selectedIds.length})`}
+            </button>
+          </div>
+        </div>
+      </DialogModal>
 
       {/* Modal: Thêm khách hàng mới */}
       <DialogModal 
@@ -318,8 +512,8 @@ export default function CustomersPage() {
             >
               Hủy
             </button>
-            <button type="submit" className="primary-button">
-              Lưu khách hàng
+            <button type="submit" className="primary-button" disabled={isSubmitting}>
+              {isSubmitting ? 'Đang lưu...' : 'Lưu khách hàng'}
             </button>
           </div>
         </form>
@@ -350,15 +544,15 @@ export default function CustomersPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '14px', textAlign: 'center' }}>
               <div style={{ padding: '12px', background: '#fff', borderRadius: '10px', border: '1px solid #ebdccb' }}>
                 <small style={{ color: '#776c5b', display: 'block' }}>Tổng đơn hàng</small>
-                <strong style={{ fontSize: '20px' }}>{viewingCustomer.ordersCount}</strong>
+                <strong style={{ fontSize: '20px' }}>{viewingCustomer.ordersCount || 0}</strong>
               </div>
               <div style={{ padding: '12px', background: '#fff', borderRadius: '10px', border: '1px solid #ebdccb' }}>
                 <small style={{ color: '#776c5b', display: 'block' }}>Tổng chi tiêu</small>
-                <strong style={{ fontSize: '20px', color: '#2b6e41' }}>${viewingCustomer.totalSpent.toFixed(2)}</strong>
+                <strong style={{ fontSize: '20px', color: '#2b6e41' }}>${Number(viewingCustomer.totalSpent || 0).toFixed(2)}</strong>
               </div>
               <div style={{ padding: '12px', background: '#fff', borderRadius: '10px', border: '1px solid #ebdccb' }}>
                 <small style={{ color: '#776c5b', display: 'block' }}>Giá trị TB (AOV)</small>
-                <strong style={{ fontSize: '20px' }}>${viewingCustomer.aov.toFixed(2)}</strong>
+                <strong style={{ fontSize: '20px' }}>${Number(viewingCustomer.aov || 0).toFixed(2)}</strong>
               </div>
             </div>
 
@@ -473,7 +667,7 @@ export default function CustomersPage() {
                   type="text" 
                   className="c-field"
                   style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
-                  value={editingCustomer.location}
+                  value={editingCustomer.location || ''}
                   onChange={e => setEditingCustomer({ ...editingCustomer, location: e.target.value })}
                 />
               </div>
@@ -501,15 +695,15 @@ export default function CustomersPage() {
               >
                 Hủy
               </button>
-              <button type="submit" className="primary-button">
-                Lưu cập nhật
+              <button type="submit" className="primary-button" disabled={isSubmitting}>
+                {isSubmitting ? 'Đang lưu...' : 'Lưu cập nhật'}
               </button>
             </div>
           </form>
         )}
       </DialogModal>
 
-      {/* Modal: Xác nhận xóa khách hàng */}
+      {/* Modal: Xác nhận xóa khách hàng lẻ */}
       <DialogModal 
         isOpen={Boolean(deletingCustomer)} 
         onClose={() => setDeletingCustomer(null)}
@@ -531,10 +725,11 @@ export default function CustomersPage() {
               <button 
                 type="button" 
                 className="primary-button"
+                disabled={isSubmitting}
                 style={{ background: '#b23b3b', borderColor: '#b23b3b', color: '#fff' }}
                 onClick={handleConfirmDelete}
               >
-                Xác nhận xóa
+                {isSubmitting ? 'Đang xóa...' : 'Xác nhận xóa'}
               </button>
             </div>
           </div>

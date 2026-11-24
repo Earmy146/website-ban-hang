@@ -1,8 +1,11 @@
 import React from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import AppShell from './components/layout/AppShell';
 
-// Các trang thành phần độc lập (Modular 100% React JSX Pages)
+// Giao diện Cửa hàng phía Người dùng mua sắm (Customer Storefront)
+import StorefrontApp from './pages/storefront/StorefrontApp';
+
+// Các trang thành phần độc lập của Admin (Modular 100% React JSX Pages)
 import OverviewPage from './pages/overview/OverviewPage';
 import ProductsPage from './pages/commerce/products/ProductsPage';
 import OrdersPage from './pages/commerce/orders/OrdersPage';
@@ -24,17 +27,26 @@ import ChatPage from './pages/commerce/support/ChatPage';
 import AiWorkflowsPage from './pages/commerce/ai/AiWorkflowsPage';
 import UsersPage from './pages/commerce/team/UsersPage';
 
-// Bộ kết xuất nghiệp vụ chuẩn mực React JSX cho các tuyến đường con còn lại
+// Bộ điều phối chuyên sâu cho 45+ tuyến đường con của Admin
 import GeneralCommercePage from './pages/common/GeneralCommercePage';
+
+function AdminWorkspaceLayout() {
+  return (
+    <AppShell>
+      <Outlet />
+    </AppShell>
+  );
+}
 
 export default function App() {
   return (
-    <AppShell>
-      <Routes>
-        {/* Điều hướng mặc định */}
-        <Route path="/" element={<Navigate to="/overview" replace />} />
+    <Routes>
+      {/* Giao diện Cửa hàng trực tuyến cho Người dùng cuối (độc lập ngoài AppShell) */}
+      <Route path="/store/*" element={<StorefrontApp />} />
 
-        {/* Các trang nghiệp vụ cốt lõi 100% React JSX */}
+      {/* Không gian Quản trị viên (Admin Dashboard) */}
+      <Route element={<AdminWorkspaceLayout />}>
+        <Route path="/" element={<Navigate to="/overview" replace />} />
         <Route path="/overview" element={<OverviewPage />} />
         <Route path="/commerce/products" element={<ProductsPage />} />
         <Route path="/commerce/categories" element={<CategoriesPage />} />
@@ -48,15 +60,16 @@ export default function App() {
         <Route path="/commerce/reviews" element={<ReviewsPage />} />
         <Route path="/commerce/transactions" element={<TransactionsPage />} />
         <Route path="/commerce/reports" element={<ReportsPage />} />
+        <Route path="/commerce/report-sales" element={<ReportsPage />} />
         <Route path="/commerce/marketplace" element={<MarketplacePage />} />
         <Route path="/commerce/chat" element={<ChatPage />} />
         <Route path="/commerce/ai-workflows" element={<AiWorkflowsPage />} />
         <Route path="/commerce/users" element={<UsersPage />} />
         <Route path="/commerce/settings-general" element={<GeneralSettingsPage />} />
 
-        {/* Bộ điều phối chuẩn React JSX cho mọi tuyến đường con chuyên sâu khác */}
-        <Route path="/*" element={<GeneralCommercePage />} />
-      </Routes>
-    </AppShell>
+        {/* Bộ điều phối thông minh cho 45+ tuyến đường phân hệ con */}
+        <Route path="*" element={<GeneralCommercePage />} />
+      </Route>
+    </Routes>
   );
 }

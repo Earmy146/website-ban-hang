@@ -1,26 +1,75 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import OrderHeading from '../../../components/commerce/orders/OrderHeading';
 import OrderSummaryCards from '../../../components/commerce/orders/OrderSummaryCards';
 import OrderToolbar from '../../../components/commerce/orders/OrderToolbar';
 import OrderTable from '../../../components/commerce/orders/OrderTable';
 import DialogModal from '../../../components/ui/DialogModal';
 import { initialOrders } from '../../../data/mockOrders';
+import api from '../../../services/api';
+
+function BarcodeSvg({ code = 'SF83291' }) {
+  const chars = String(code).split('');
+  const bars = [];
+  let x = 8;
+  chars.forEach((ch, idx) => {
+    const val = ch.charCodeAt(0) + idx * 7;
+    const w1 = (val % 3) + 1.5;
+    const w2 = ((val >> 2) % 2) + 1;
+    const gap1 = ((val >> 1) % 2) + 1.5;
+    const gap2 = ((val >> 3) % 2) + 2;
+    bars.push({ x, w: w1 });
+    x += w1 + gap1;
+    bars.push({ x, w: w2 });
+    x += w2 + gap2;
+  });
+  bars.push({ x, w: 2.5 });
+  const totalWidth = Math.max(160, x + 10);
+
+  return (
+    <svg viewBox={`0 0 ${totalWidth} 44`} style={{ width: '180px', height: '42px', display: 'block' }} aria-label={`Mã vạch ${code}`}>
+      <rect x="0" y="0" width={totalWidth} height="44" fill="#fff" />
+      {bars.map((b, i) => (
+        <rect key={i} x={b.x} y="4" width={b.w} height="28" fill="#1e1b18" />
+      ))}
+      <text x={totalWidth / 2} y="41" textAnchor="middle" fontSize="9" fontFamily="monospace" fill="#30281b">
+        *{code}*
+      </text>
+    </svg>
+  );
+}
 
 export default function OrdersPage() {
+  const [searchParams] = useSearchParams();
   const [orders, setOrders] = useState(initialOrders);
   const [selectedIds, setSelectedIds] = useState([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   
-  // Bộ lọc
-  const [channelFilter, setChannelFilter] = useState('all');
-  const [paymentFilter, setPaymentFilter] = useState('all');
-  const [fulfillmentFilter, setFulfillmentFilter] = useState('all');
-  const [searchQuery, setSearchQuery] = useState('');
+  // Bộ lọc (đồng bộ từ URL query params khi điều hướng từ Overview)
+  const [channelFilter, setChannelFilter] = useState(() => searchParams.get('channel') || 'all');
+  const [paymentFilter, setPaymentFilter] = useState(() => searchParams.get('payment') || 'all');
+  const [fulfillmentFilter, setFulfillmentFilter] = useState(() => searchParams.get('fulfillment') || 'all');
+  const [searchQuery, setSearchQuery] = useState(() => searchParams.get('search') || '');
 
   // Modals
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isAddModalOpen, setIsAddModalOpen] = useState(() => searchParams.get('action') === 'new');
+
+  useEffect(() => {
+    const ful = searchParams.get('fulfillment');
+    const pay = searchParams.get('payment');
+    const ch = searchParams.get('channel');
+    const q = searchParams.get('search');
+    if (ful) setFulfillmentFilter(ful);
+    if (pay) setPaymentFilter(pay);
+    if (ch) setChannelFilter(ch);
+    if (q !== null) setSearchQuery(q);
+    if (searchParams.get('action') === 'new') setIsAddModalOpen(true);
+  }, [searchParams]);
   const [viewingOrder, setViewingOrder] = useState(null);
   const [editingOrder, setEditingOrder] = useState(null);
   const [cancelingOrder, setCancelingOrder] = useState(null);
+  const [isBulkCancelModalOpen, setIsBulkCancelModalOpen] = useState(false);
+  const [printingOrders, setPrintingOrders] = useState([]);
 
   // Form thêm đơn hàng mới
   const [newOrder, setNewOrder] = useState({
@@ -38,13 +87,28 @@ export default function OrdersPage() {
 
   // Toasts
   const [toasts, setToasts] = useState([]);
-  const showToast = (message, type = 'success') => {
+  const showToast = useCallback((message, type = 'success') => {
     const id = Date.now() + Math.random();
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 3200);
-  };
+  }, []);
+
+  const loadOrders = useCallback(async () => {
+    try {
+      const data = await api.getOrders();
+      if (Array.isArray(data)) {
+        setOrders(data);
+      }
+    } catch (err) {
+      showToast(err.message || 'Không thể tải danh sách đơn hàng', 'error');
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    loadOrders();
+  }, [loadOrders]);
 
   // Lọc realtime
   const filteredOrders = useMemo(() => {
@@ -54,9 +118,11 @@ export default function OrdersPage() {
       if (fulfillmentFilter !== 'all' && o.fulfillmentStatus !== fulfillmentFilter) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchId = o.id.toLowerCase().includes(q);
-        const matchCustomer = o.customer.name.toLowerCase().includes(q) || o.customer.email.toLowerCase().includes(q);
-        const matchDesc = o.itemsDesc.toLowerCase().includes(q);
+        const matchId = (o.id || '').toLowerCase().includes(q);
+        const custName = o.customer?.name || '';
+        const custEmail = o.customer?.email || '';
+        const matchCustomer = custName.toLowerCase().includes(q) || custEmail.toLowerCase().includes(q);
+        const matchDesc = (o.itemsDesc || '').toLowerCase().includes(q);
         if (!matchId && !matchCustomer && !matchDesc) return false;
       }
       return true;
@@ -82,17 +148,43 @@ export default function OrdersPage() {
     setSelectedIds([]);
   };
 
-  // Batch actions
-  const handleBulkPrint = () => {
-    showToast(`Đang in nhãn vận đơn cho ${selectedIds.length} đơn hàng đã chọn...`);
-    setSelectedIds([]);
+  const handleViewOrder = async (order) => {
+    setViewingOrder(order);
+    try {
+      const fresh = await api.getOrder(order.id);
+      if (fresh && fresh.id) {
+        setViewingOrder(fresh);
+      }
+    } catch {}
   };
 
+  // Mở xem trước nhãn vận đơn hàng loạt
+  const handleBulkPrint = () => {
+    const selected = orders.filter(o => selectedIds.includes(o.id));
+    if (selected.length === 0) return;
+    setPrintingOrders(selected);
+  };
+
+  // Mở DialogModal xác nhận hủy đơn hàng loạt
   const handleBulkCancel = () => {
-    if (window.confirm(`Bạn có chắc muốn hủy ${selectedIds.length} đơn hàng đã chọn không?`)) {
-      setOrders(prev => prev.filter(o => !selectedIds.includes(o.id)));
-      showToast(`Đã hủy thành công ${selectedIds.length} đơn hàng.`);
+    if (selectedIds.length === 0) return;
+    setIsBulkCancelModalOpen(true);
+  };
+
+  const handleConfirmBulkCancel = async () => {
+    if (selectedIds.length === 0 || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const count = selectedIds.length;
+      await api.bulkCancelOrders(selectedIds);
+      await loadOrders();
       setSelectedIds([]);
+      setIsBulkCancelModalOpen(false);
+      showToast(`Đã hủy thành công ${count} đơn hàng.`);
+    } catch (err) {
+      showToast(err.message || 'Lỗi khi hủy đơn hàng loạt', 'error');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -101,11 +193,11 @@ export default function OrdersPage() {
     const headers = ['Mã đơn', 'Khách hàng', 'Email', 'Kênh bán', 'Sản phẩm', 'Tổng tiền ($)', 'Thanh toán', 'Giao hàng', 'Địa chỉ', 'Ngày tạo'];
     const rows = filteredOrders.map(o => [
       `#${o.id}`,
-      `"${o.customer.name}"`,
-      `"${o.customer.email}"`,
+      `"${o.customer?.name || ''}"`,
+      `"${o.customer?.email || ''}"`,
       `"${o.channel}"`,
       `"${o.itemsDesc}"`,
-      o.total.toFixed(2),
+      Number(o.total || 0).toFixed(2),
       o.paymentStatus,
       o.fulfillmentStatus,
       `"${o.address}"`,
@@ -124,25 +216,20 @@ export default function OrdersPage() {
   };
 
   // Tạo đơn hàng mới
-  const handleCreateOrder = (e) => {
+  const handleCreateOrder = async (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!newOrder.customerName.trim() || !newOrder.total) {
       showToast('Vui lòng nhập đầy đủ tên khách hàng và tổng tiền!', 'error');
       return;
     }
 
-    const randomNum = Math.floor(10000 + Math.random() * 90000);
-    const created = {
-      id: `SF${randomNum}`,
-      customer: {
-        name: newOrder.customerName.trim(),
-        email: newOrder.customerEmail.trim() || `${newOrder.customerName.toLowerCase().replace(/\s+/g, '.')}@example.com`,
-        avatar: newOrder.customerName.substring(0, 2).toUpperCase()
-      },
-      date: 'Hôm nay',
+    const payload = {
+      customerName: newOrder.customerName.trim(),
+      customerEmail: newOrder.customerEmail.trim(),
       channel: newOrder.channel,
-      itemsCount: Number(newOrder.itemsCount) || 1,
       itemsDesc: newOrder.itemsDesc.trim() || 'Đơn hàng tạo thủ công',
+      itemsCount: Number(newOrder.itemsCount) || 1,
       total: parseFloat(newOrder.total) || 0,
       paymentStatus: newOrder.paymentStatus,
       fulfillmentStatus: newOrder.fulfillmentStatus,
@@ -150,42 +237,90 @@ export default function OrdersPage() {
       address: newOrder.address
     };
 
-    setOrders([created, ...orders]);
-    setIsAddModalOpen(false);
-    setNewOrder({
-      customerName: '',
-      customerEmail: '',
-      channel: 'Cửa hàng trực tuyến',
-      itemsDesc: '',
-      itemsCount: 1,
-      total: '',
-      paymentStatus: 'Paid',
-      fulfillmentStatus: 'Processing',
-      shippingMethod: 'Giao hàng tiêu chuẩn',
-      address: 'Quận 1, TP. Hồ Chí Minh'
-    });
-    showToast(`Đã tạo thành công đơn hàng #${created.id}!`);
+    setIsSubmitting(true);
+    try {
+      const created = await api.createOrder(payload);
+      if (created && created.id) {
+        setOrders(prev => [created, ...prev]);
+      } else {
+        await loadOrders();
+      }
+      setIsAddModalOpen(false);
+      setNewOrder({
+        customerName: '',
+        customerEmail: '',
+        channel: 'Cửa hàng trực tuyến',
+        itemsDesc: '',
+        itemsCount: 1,
+        total: '',
+        paymentStatus: 'Paid',
+        fulfillmentStatus: 'Processing',
+        shippingMethod: 'Giao hàng tiêu chuẩn',
+        address: 'Quận 1, TP. Hồ Chí Minh'
+      });
+      showToast(`Đã tạo thành công đơn hàng #${created?.id || ''}!`);
+    } catch (err) {
+      showToast(err.message || 'Lỗi khi tạo đơn hàng', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Lưu chỉnh sửa trạng thái
-  const handleSaveOrderUpdate = (e) => {
+  const handleSaveOrderUpdate = async (e) => {
     e.preventDefault();
-    if (!editingOrder) return;
-    setOrders(prev => prev.map(o => o.id === editingOrder.id ? editingOrder : o));
-    setEditingOrder(null);
-    showToast(`Đã cập nhật trạng thái đơn hàng #${editingOrder.id}!`);
+    if (!editingOrder || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const updated = await api.updateOrderStatus(editingOrder.id, {
+        paymentStatus: editingOrder.paymentStatus,
+        fulfillmentStatus: editingOrder.fulfillmentStatus
+      });
+      if (updated && updated.id) {
+        setOrders(prev => prev.map(o => (o.id === editingOrder.id ? updated : o)));
+      } else {
+        await loadOrders();
+      }
+      const orderCode = editingOrder.id;
+      setEditingOrder(null);
+      showToast(`Đã cập nhật trạng thái đơn hàng #${orderCode}!`);
+    } catch (err) {
+      showToast(err.message || 'Lỗi khi cập nhật trạng thái đơn hàng', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  // Hủy đơn hàng
-  const handleConfirmCancel = () => {
-    if (!cancelingOrder) return;
-    setOrders(prev => prev.filter(o => o.id !== cancelingOrder.id));
-    setCancelingOrder(null);
-    showToast(`Đã hủy đơn hàng #${cancelingOrder.id}!`);
+  // Hủy đơn hàng lẻ
+  const handleConfirmCancel = async () => {
+    if (!cancelingOrder || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const targetId = cancelingOrder.id;
+      await api.deleteOrder(targetId);
+      await loadOrders();
+      setSelectedIds(prev => prev.filter(id => id !== targetId));
+      setCancelingOrder(null);
+      showToast(`Đã hủy đơn hàng #${targetId}!`);
+    } catch (err) {
+      showToast(err.message || 'Lỗi khi hủy đơn hàng', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handlePrintLabel = (order) => {
-    showToast(`Đang in nhãn vận đơn cho đơn #${order.id}...`);
+    setPrintingOrders([order]);
+  };
+
+  const handleExecutePrint = () => {
+    const count = printingOrders.length;
+    try {
+      window.print();
+    } catch {}
+    setPrintingOrders([]);
+    setSelectedIds([]);
+    showToast(`Đã gửi lệnh in ${count} phiếu gửi hàng thành công!`);
   };
 
   return (
@@ -208,6 +343,45 @@ export default function OrdersPage() {
         onSearchChange={setSearchQuery}
       />
 
+      {(channelFilter !== 'all' || paymentFilter !== 'all' || fulfillmentFilter !== 'all' || searchQuery.trim()) && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '8px',
+            marginTop: '10px',
+            padding: '8px 14px',
+            background: '#faf5ea',
+            border: '1px solid #e5d8c3',
+            borderRadius: '10px',
+            fontSize: '13px'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <strong>Đang lọc ({filteredOrders.length} đơn):</strong>
+            {channelFilter !== 'all' && <span className="badge badge-indigo">Kênh: {channelFilter}</span>}
+            {paymentFilter !== 'all' && <span className="badge badge-green">Thanh toán: {paymentFilter}</span>}
+            {fulfillmentFilter !== 'all' && <span className="badge badge-amber">Giao hàng: {fulfillmentFilter}</span>}
+            {searchQuery.trim() && <span className="badge badge-blue">Từ khóa: "{searchQuery}"</span>}
+          </div>
+          <button
+            type="button"
+            className="secondary-button"
+            style={{ padding: '3px 10px', fontSize: '12px' }}
+            onClick={() => {
+              setChannelFilter('all');
+              setPaymentFilter('all');
+              setFulfillmentFilter('all');
+              setSearchQuery('');
+            }}
+          >
+            ✕ Xóa bộ lọc
+          </button>
+        </div>
+      )}
+
       <OrderTable 
         orders={filteredOrders}
         selectedIds={selectedIds}
@@ -216,7 +390,7 @@ export default function OrdersPage() {
         onBulkPrint={handleBulkPrint}
         onBulkCancel={handleBulkCancel}
         onClearSelection={handleClearSelection}
-        onViewOrder={setViewingOrder}
+        onViewOrder={handleViewOrder}
         onUpdateStatus={setEditingOrder}
         onPrintLabel={handlePrintLabel}
         onCancelOrder={setCancelingOrder}
@@ -283,6 +457,7 @@ export default function OrdersPage() {
               <input 
                 type="number" 
                 step="0.01"
+                min="0"
                 required
                 className="c-field"
                 style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
@@ -297,6 +472,7 @@ export default function OrdersPage() {
               </label>
               <input 
                 type="number" 
+                min="1"
                 className="c-field"
                 style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d4c8b8' }}
                 value={newOrder.itemsCount}
@@ -374,8 +550,8 @@ export default function OrdersPage() {
             >
               Hủy
             </button>
-            <button type="submit" className="primary-button">
-              Lưu đơn hàng
+            <button type="submit" className="primary-button" disabled={isSubmitting}>
+              {isSubmitting ? 'Đang lưu...' : 'Lưu đơn hàng'}
             </button>
           </div>
         </form>
@@ -392,7 +568,7 @@ export default function OrdersPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '18px', fontSize: '14px', color: '#3c352a' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 18px', background: '#f5efe4', borderRadius: '12px' }}>
               <div>
-                <strong>Khách hàng: </strong> {viewingOrder.customer.name} ({viewingOrder.customer.email})
+                <strong>Khách hàng: </strong> {viewingOrder.customer?.name} ({viewingOrder.customer?.email})
               </div>
               <div>
                 <strong>Kênh bán: </strong> {viewingOrder.channel}
@@ -402,11 +578,14 @@ export default function OrdersPage() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
               <div>
                 <p><strong>Ngày đặt hàng:</strong> {viewingOrder.date}</p>
-                <p><strong>Tổng thanh toán:</strong> <span style={{ fontSize: '16px', fontWeight: '700', color: '#2a6946' }}>${viewingOrder.total.toFixed(2)}</span></p>
+                <p><strong>Tổng thanh toán:</strong> <span style={{ fontSize: '16px', fontWeight: '700', color: '#2a6946' }}>${Number(viewingOrder.total || 0).toFixed(2)}</span></p>
                 <p><strong>Phương thức vận chuyển:</strong> {viewingOrder.shippingMethod}</p>
               </div>
               <div>
-                <p><strong>Trạng thái thanh toán:</strong> {viewingOrder.paymentStatus === 'Paid' ? 'Đã thanh toán' : 'Chờ thanh toán'}</p>
+                <p>
+                  <strong>Trạng thái thanh toán:</strong>{' '}
+                  {viewingOrder.paymentStatus === 'Paid' ? 'Đã thanh toán' : viewingOrder.paymentStatus === 'Refunded' ? 'Đã hoàn tiền' : 'Chờ thanh toán'}
+                </p>
                 <p><strong>Trạng thái giao hàng:</strong> {viewingOrder.fulfillmentStatus}</p>
                 <p><strong>Địa chỉ giao hàng:</strong> {viewingOrder.address}</p>
               </div>
@@ -421,6 +600,17 @@ export default function OrdersPage() {
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '10px' }}>
+              <button 
+                type="button" 
+                className="secondary-button"
+                onClick={() => {
+                  const target = viewingOrder;
+                  setViewingOrder(null);
+                  setPrintingOrders([target]);
+                }}
+              >
+                In nhãn vận đơn
+              </button>
               <button 
                 type="button" 
                 className="secondary-button"
@@ -441,6 +631,81 @@ export default function OrdersPage() {
             </div>
           </div>
         )}
+      </DialogModal>
+
+      {/* Modal: Xem trước Phiếu Gửi Hàng (In nhãn vận đơn lẻ & hàng loạt) */}
+      <DialogModal
+        isOpen={printingOrders.length > 0}
+        onClose={() => setPrintingOrders([])}
+        title={`Xem trước Phiếu Gửi Hàng (${printingOrders.length} phiếu)`}
+        wide={true}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ maxHeight: '58vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '14px', paddingRight: '4px' }}>
+            {printingOrders.map((o) => {
+              const isCod = o.paymentStatus !== 'Paid';
+              return (
+                <div
+                  key={o.id}
+                  style={{
+                    border: '2px dashed #5d5140',
+                    borderRadius: '12px',
+                    padding: '16px 18px',
+                    background: '#fff',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '12px',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e5dac9', paddingBottom: '10px', flexWrap: 'wrap', gap: '10px' }}>
+                    <div>
+                      <strong style={{ fontSize: '16px', color: '#25211d', letterSpacing: '0.5px' }}>VEYLIX EXPRESS FULFILLMENT</strong>
+                      <small style={{ display: 'block', color: '#685947' }}>Mã đơn hàng: <strong>#{o.id}</strong> · Ngày: {o.date}</small>
+                    </div>
+                    <BarcodeSvg code={o.id} />
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', fontSize: '13px' }}>
+                    <div style={{ padding: '10px 12px', background: '#faf6ee', borderRadius: '8px' }}>
+                      <small style={{ color: '#776c5b', fontWeight: '700', textTransform: 'uppercase' }}>Người gửi</small>
+                      <strong style={{ display: 'block', marginTop: '2px' }}>Kho Trung Tâm Veylix Studio</strong>
+                      <span>Tầng 12, Tòa nhà Bitexco, Quận 1, TP.HCM</span>
+                      <small style={{ display: 'block', color: '#685947' }}>Hotline: +84 28 3822 1234</small>
+                    </div>
+                    <div style={{ padding: '10px 12px', background: '#f5efe4', borderRadius: '8px' }}>
+                      <small style={{ color: '#776c5b', fontWeight: '700', textTransform: 'uppercase' }}>Người nhận</small>
+                      <strong style={{ display: 'block', marginTop: '2px' }}>{o.customer?.name}</strong>
+                      <span>{o.address || 'TP. Hồ Chí Minh'}</span>
+                      <small style={{ display: 'block', color: '#685947' }}>Email: {o.customer?.email}</small>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #e5dac9', paddingTop: '10px', fontSize: '13px', flexWrap: 'wrap', gap: '8px' }}>
+                    <div>
+                      <strong>Kiện hàng ({o.itemsCount || 1} SP):</strong> {o.itemsDesc}
+                      <small style={{ display: 'block', color: '#776c5b' }}>Hình thức giao: {o.shippingMethod}</small>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <span style={{ fontSize: '11px', color: '#776c5b', display: 'block' }}>TIỀN THU HỘ (COD)</span>
+                      <strong style={{ fontSize: '16px', color: isCod ? '#b23b3b' : '#205835' }}>
+                        {isCod ? `$${Number(o.total || 0).toFixed(2)}` : '$0.00 (Đã thanh toán)'}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', borderTop: '1px solid #e5dac9', paddingTop: '12px' }}>
+            <button type="button" className="secondary-button" onClick={() => setPrintingOrders([])}>
+              Đóng
+            </button>
+            <button type="button" className="primary-button" onClick={handleExecutePrint}>
+              In phiếu ngay ({printingOrders.length})
+            </button>
+          </div>
+        </div>
       </DialogModal>
 
       {/* Modal: Cập nhật trạng thái */}
@@ -481,6 +746,7 @@ export default function OrdersPage() {
                 <option value="Packed">Đã đóng gói</option>
                 <option value="Shipped">Đang giao hàng</option>
                 <option value="Delivered">Đã giao thành công</option>
+                <option value="Cancelled">Đã hủy</option>
               </select>
             </div>
 
@@ -492,15 +758,15 @@ export default function OrdersPage() {
               >
                 Hủy
               </button>
-              <button type="submit" className="primary-button">
-                Lưu thay đổi
+              <button type="submit" className="primary-button" disabled={isSubmitting}>
+                {isSubmitting ? 'Đang lưu...' : 'Lưu thay đổi'}
               </button>
             </div>
           </form>
         )}
       </DialogModal>
 
-      {/* Modal: Xác nhận hủy đơn */}
+      {/* Modal: Xác nhận hủy đơn lẻ */}
       <DialogModal 
         isOpen={Boolean(cancelingOrder)} 
         onClose={() => setCancelingOrder(null)}
@@ -509,7 +775,7 @@ export default function OrdersPage() {
         {cancelingOrder && (
           <div>
             <p style={{ marginBottom: '16px', lineHeight: '1.5' }}>
-              Bạn có chắc chắn muốn hủy đơn hàng <strong>#{cancelingOrder.id}</strong> của khách hàng <strong>{cancelingOrder.customer.name}</strong> không? Hành động này không thể hoàn tác.
+              Bạn có chắc chắn muốn hủy đơn hàng <strong>#{cancelingOrder.id}</strong> của khách hàng <strong>{cancelingOrder.customer?.name}</strong> không? Hành động này không thể hoàn tác.
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
               <button 
@@ -522,14 +788,46 @@ export default function OrdersPage() {
               <button 
                 type="button" 
                 className="primary-button"
+                disabled={isSubmitting}
                 style={{ background: '#b23b3b', borderColor: '#b23b3b', color: '#fff' }}
                 onClick={handleConfirmCancel}
               >
-                Xác nhận hủy
+                {isSubmitting ? 'Đang hủy...' : 'Xác nhận hủy'}
               </button>
             </div>
           </div>
         )}
+      </DialogModal>
+
+      {/* Modal: Xác nhận hủy đơn hàng loạt */}
+      <DialogModal
+        isOpen={isBulkCancelModalOpen}
+        onClose={() => setIsBulkCancelModalOpen(false)}
+        title="Xác nhận hủy đơn hàng loạt"
+      >
+        <div>
+          <p style={{ marginBottom: '16px', lineHeight: '1.6' }}>
+            Bạn có chắc chắn muốn hủy <strong>{selectedIds.length} đơn hàng đã chọn</strong> ({selectedIds.map(id => `#${id}`).join(', ')}) không? Trạng thái đơn hàng sẽ được cập nhật đồng bộ trong cơ sở dữ liệu.
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setIsBulkCancelModalOpen(false)}
+            >
+              Giữ lại
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              disabled={isSubmitting}
+              style={{ background: '#b23b3b', borderColor: '#b23b3b', color: '#fff' }}
+              onClick={handleConfirmBulkCancel}
+            >
+              {isSubmitting ? 'Đang xử lý...' : `Xác nhận hủy (${selectedIds.length})`}
+            </button>
+          </div>
+        </div>
       </DialogModal>
 
       {/* Toasts thông báo góc phải */}

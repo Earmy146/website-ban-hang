@@ -1,6 +1,14 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import DialogModal from '../../../components/ui/DialogModal';
+import api from '../../../services/api';
+
+const GATEWAY_META = [
+  { id: 'Stripe', label: 'Stripe (Thẻ quốc tế)', icon: '💳', color: '#635bff' },
+  { id: 'VNPay QR', label: 'VNPay QR', icon: '🏦', color: '#0066b2' },
+  { id: 'MoMo', label: 'Ví MoMo', icon: '📱', color: '#a50064' },
+  { id: 'PayPal', label: 'PayPal', icon: '🌐', color: '#0070ba' },
+];
 
 export default function TransactionsPage() {
   const initialTransactions = [
@@ -12,7 +20,7 @@ export default function TransactionsPage() {
       amount: 95.72,
       fee: 2.78,
       net: 92.94,
-      status: 'Succeeded', // Succeeded, Pending, Refunded
+      status: 'Succeeded',
       statusText: 'Thành công',
       statusClass: 'green',
       date: 'Hôm nay, 10:14',
@@ -94,20 +102,53 @@ export default function TransactionsPage() {
   const [gatewayFilter, setGatewayFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Modals
   const [viewingTxn, setViewingTxn] = useState(null);
+  const [receiptTxn, setReceiptTxn] = useState(null);
   const [refundingTxn, setRefundingTxn] = useState(null);
 
   // Toasts
   const [toasts, setToasts] = useState([]);
-  const showToast = (message, type = 'success') => {
+  const showToast = useCallback((message, type = 'success') => {
     const id = Date.now() + Math.random();
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 3200);
-  };
+  }, []);
+
+  const loadTransactions = useCallback(async () => {
+    try {
+      const data = await api.getTransactions();
+      if (Array.isArray(data)) {
+        setTransactions(data);
+      }
+    } catch (err) {
+      showToast(err.message || 'Không thể tải lịch sử giao dịch', 'error');
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    loadTransactions();
+  }, [loadTransactions]);
+
+  // Thống kê doanh số theo Cổng thanh toán
+  const gatewayBreakdown = useMemo(() => {
+    const totalAmount = transactions.reduce((s, t) => s + Math.max(0, Number(t.amount || 0)), 0) || 1;
+    return GATEWAY_META.map(g => {
+      const items = transactions.filter(t => t.gateway === g.id);
+      const volume = items.reduce((s, t) => s + Math.max(0, Number(t.amount || 0)), 0);
+      const share = Math.round((volume / totalAmount) * 100);
+      return {
+        ...g,
+        count: items.length,
+        volume,
+        share,
+      };
+    });
+  }, [transactions]);
 
   // Lọc
   const filteredTxns = useMemo(() => {
@@ -116,9 +157,9 @@ export default function TransactionsPage() {
       if (statusFilter !== 'all' && t.status !== statusFilter) return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchId = t.id.toLowerCase().includes(q);
-        const matchOrd = t.orderId.toLowerCase().includes(q);
-        const matchCust = t.customer.toLowerCase().includes(q);
+        const matchId = (t.id || '').toLowerCase().includes(q);
+        const matchOrd = (t.orderId || '').toLowerCase().includes(q);
+        const matchCust = (t.customer || '').toLowerCase().includes(q);
         if (!matchId && !matchOrd && !matchCust) return false;
       }
       return true;
@@ -126,11 +167,31 @@ export default function TransactionsPage() {
   }, [transactions, gatewayFilter, statusFilter, searchQuery]);
 
   // Hoàn tiền
-  const handleConfirmRefund = () => {
-    if (!refundingTxn) return;
-    setTransactions(prev => prev.map(t => t.id === refundingTxn.id ? { ...t, status: 'Refunded', statusText: 'Đã hoàn tiền', statusClass: 'red' } : t));
-    showToast(`Đã hoàn tiền thành công cho giao dịch ${refundingTxn.id}!`);
-    setRefundingTxn(null);
+  const handleConfirmRefund = async () => {
+    if (!refundingTxn || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const targetId = refundingTxn.id;
+      const updated = await api.refundTransaction(targetId);
+      if (updated && updated.id) {
+        setTransactions(prev => prev.map(t => (t.id === targetId ? updated : t)));
+      } else {
+        await loadTransactions();
+      }
+      showToast(`Đã hoàn tiền thành công cho giao dịch ${targetId}!`);
+      setRefundingTxn(null);
+    } catch (err) {
+      showToast(err.message || 'Lỗi khi xử lý hoàn tiền', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handlePrintReceipt = () => {
+    try {
+      window.print();
+    } catch {}
+    showToast(`✓ Đã gửi lệnh in biên lai giao dịch ${receiptTxn?.id || ''}!`);
   };
 
   // Xuất file CSV
@@ -141,9 +202,9 @@ export default function TransactionsPage() {
       `"#${t.orderId}"`,
       `"${t.customer}"`,
       `"${t.gateway}"`,
-      t.amount.toFixed(2),
-      t.fee.toFixed(2),
-      t.net.toFixed(2),
+      Number(t.amount || 0).toFixed(2),
+      Number(t.fee || 0).toFixed(2),
+      Number(t.net || 0).toFixed(2),
       `"${t.statusText}"`,
       `"${t.date}"`
     ]);
@@ -159,7 +220,7 @@ export default function TransactionsPage() {
     showToast('Đã xuất lịch sử giao dịch thành công!');
   };
 
-  const totalSettled = transactions.filter(t => t.status === 'Succeeded').reduce((sum, t) => sum + t.net, 0);
+  const totalSettled = transactions.filter(t => t.status === 'Succeeded').reduce((sum, t) => sum + Number(t.net || 0), 0);
 
   return (
     <div className="transactions-page" style={{ paddingBottom: '36px' }}>
@@ -178,6 +239,9 @@ export default function TransactionsPage() {
         </div>
 
         <div className="commerce-heading-actions">
+          <Link to="/commerce/providers" className="secondary-button" style={{ textDecoration: 'none' }}>
+            Cấu hình cổng thanh toán
+          </Link>
           <button type="button" className="secondary-button" onClick={handleExport}>
             <span className="icon" aria-hidden="true">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor">
@@ -190,7 +254,7 @@ export default function TransactionsPage() {
       </header>
 
       {/* KPI Cards */}
-      <section className="order-summary-grid" style={{ marginBottom: '20px' }}>
+      <section className="order-summary-grid" style={{ marginBottom: '16px' }}>
         <div className="order-summary-card green">
           <div>
             <small>Đã quyết toán về tài khoản</small>
@@ -218,6 +282,62 @@ export default function TransactionsPage() {
             <strong>{transactions.filter(t => t.status === 'Refunded').length}</strong>
             <em>Theo yêu cầu người mua</em>
           </div>
+        </div>
+      </section>
+
+      {/* Phân bổ doanh số theo từng Cổng thanh toán (Bấm lọc nhanh 1 chạm) */}
+      <section className="glass-card" style={{ padding: '16px 20px', marginBottom: '16px' }} aria-label="Phân bổ theo cổng thanh toán">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+          <div>
+            <strong style={{ fontSize: '14px', color: '#2b2316' }}>Phân bổ dòng tiền theo Cổng thanh toán</strong>
+            <small style={{ display: 'block', color: '#776c5b', fontSize: '12px' }}>Bấm vào bất kỳ cổng nào dưới đây để lọc nhanh giao dịch của cổng đó</small>
+          </div>
+          {gatewayFilter !== 'all' && (
+            <button
+              type="button"
+              className="secondary-button"
+              style={{ padding: '4px 12px', fontSize: '12px' }}
+              onClick={() => setGatewayFilter('all')}
+            >
+              ✕ Xem tất cả cổng ({transactions.length})
+            </button>
+          )}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
+          {gatewayBreakdown.map(gw => {
+            const isSelected = gatewayFilter === gw.id;
+            return (
+              <button
+                key={gw.id}
+                type="button"
+                onClick={() => setGatewayFilter(prev => (prev === gw.id ? 'all' : gw.id))}
+                style={{
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  padding: '12px 14px',
+                  borderRadius: '12px',
+                  background: isSelected ? '#fff8e8' : 'rgba(255, 255, 255, 0.65)',
+                  border: isSelected ? '2px solid #c98a1e' : '1px solid #e6dac8',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '6px'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontWeight: '700', fontSize: '13.5px', color: '#272016' }}>
+                    {gw.icon} {gw.id}
+                  </span>
+                  <span className="badge badge-amber" style={{ fontSize: '11px' }}>{gw.count} GD</span>
+                </div>
+                <strong style={{ fontSize: '16px', color: '#276840' }}>${gw.volume.toFixed(2)}</strong>
+                <div style={{ width: '100%', height: '6px', background: '#eadfce', borderRadius: '3px', overflow: 'hidden' }}>
+                  <div style={{ width: `${Math.max(4, gw.share)}%`, height: '100%', background: gw.color, borderRadius: '3px' }} />
+                </div>
+                <small style={{ color: '#776c5b', fontSize: '11.5px' }}>Tỷ trọng: {gw.share}% tổng giá trị</small>
+              </button>
+            );
+          })}
         </div>
       </section>
 
@@ -314,29 +434,29 @@ export default function TransactionsPage() {
                       </strong>
                     </td>
                     <td>
-                      <Link to="/commerce/orders" style={{ fontWeight: '700', textDecoration: 'underline' }}>
-                        #{t.orderId}
+                      <Link to={`/commerce/orders?search=${encodeURIComponent(String(t.orderId).replace(/^#/, ''))}`} style={{ fontWeight: '700', textDecoration: 'underline' }}>
+                        #{String(t.orderId).replace(/^#/, '')}
                       </Link>
                     </td>
                     <td><strong>{t.customer}</strong></td>
                     <td>
-                      <span>{t.gateway} <small style={{ color: '#887d6d' }}>(••• {t.cardLast4})</small></span>
+                      <span>{t.gateway} <small style={{ color: '#887d6d' }}>(••• {t.cardLast4 || '4242'})</small></span>
                     </td>
-                    <td><strong>${t.amount.toFixed(2)}</strong></td>
-                    <td><small style={{ color: '#887d6d' }}>${t.fee.toFixed(2)}</small></td>
+                    <td><strong>${Number(t.amount || 0).toFixed(2)}</strong></td>
+                    <td><small style={{ color: '#887d6d' }}>${Number(t.fee || 0).toFixed(2)}</small></td>
                     <td>
-                      <strong style={{ color: t.net > 0 ? '#10b981' : '#b23b3b' }}>
-                        ${t.net.toFixed(2)}
+                      <strong style={{ color: Number(t.net) > 0 ? '#10b981' : '#b23b3b' }}>
+                        ${Number(t.net || 0).toFixed(2)}
                       </strong>
                     </td>
                     <td>
-                      <span className={`badge badge-${t.statusClass}`} style={{ fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}>
-                        {t.statusText}
+                      <span className={`badge badge-${t.statusClass || 'green'}`} style={{ fontSize: '12px', padding: '4px 8px', borderRadius: '6px' }}>
+                        {t.statusText || t.status}
                       </span>
                     </td>
                     <td><small>{t.date}</small></td>
                     <td>
-                      <div style={{ display: 'flex', gap: '6px' }}>
+                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                         <button 
                           type="button" 
                           className="secondary-button"
@@ -344,6 +464,14 @@ export default function TransactionsPage() {
                           onClick={() => setViewingTxn(t)}
                         >
                           Chi tiết
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          style={{ padding: '3px 8px', fontSize: '12px' }}
+                          onClick={() => setReceiptTxn(t)}
+                        >
+                          Biên lai
                         </button>
                         {t.status === 'Succeeded' && (
                           <button 
@@ -365,6 +493,78 @@ export default function TransactionsPage() {
         </div>
       </section>
 
+      {/* Modal: Biên lai thanh toán chuẩn có nút In */}
+      <DialogModal
+        isOpen={Boolean(receiptTxn)}
+        onClose={() => setReceiptTxn(null)}
+        title={receiptTxn ? `Biên lai thanh toán điện tử · ${receiptTxn.id}` : ''}
+      >
+        {receiptTxn && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', fontSize: '13.5px' }}>
+            <div style={{ padding: '18px 20px', background: '#fff', borderRadius: '12px', border: '1.5px solid #e2d5c1', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px dashed #d8cab3', paddingBottom: '12px' }}>
+                <div>
+                  <strong style={{ fontSize: '16px', color: '#272016', display: 'block' }}>VEYLIX COMMERCE STUDIO</strong>
+                  <small style={{ color: '#776c5b' }}>Chứng từ xác nhận giao dịch thanh toán</small>
+                </div>
+                <span className={`badge badge-${receiptTxn.statusClass || 'green'}`} style={{ padding: '4px 10px', fontSize: '12px' }}>
+                  {receiptTxn.statusText || receiptTxn.status}
+                </span>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <div>
+                  <small style={{ color: '#776c5b', display: 'block' }}>Mã giao dịch</small>
+                  <strong style={{ fontFamily: 'monospace' }}>{receiptTxn.id}</strong>
+                </div>
+                <div>
+                  <small style={{ color: '#776c5b', display: 'block' }}>Thời gian ghi nhận</small>
+                  <strong>{receiptTxn.date}</strong>
+                </div>
+                <div>
+                  <small style={{ color: '#776c5b', display: 'block' }}>Khách hàng thanh toán</small>
+                  <strong>{receiptTxn.customer}</strong>
+                </div>
+                <div>
+                  <small style={{ color: '#776c5b', display: 'block' }}>Đơn hàng liên kết</small>
+                  <strong>#{String(receiptTxn.orderId).replace(/^#/, '')}</strong>
+                </div>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <small style={{ color: '#776c5b', display: 'block' }}>Phương thức thanh toán</small>
+                  <strong>{receiptTxn.gateway} · Thẻ/Tài khoản kết thúc •••• {receiptTxn.cardLast4 || '4242'}</strong>
+                </div>
+              </div>
+
+              <div style={{ background: '#faf6ee', padding: '12px 14px', borderRadius: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Tổng tiền khách thanh toán:</span>
+                  <strong>${Number(receiptTxn.amount || 0).toFixed(2)}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#776c5b' }}>
+                  <span>Phí xử lý cổng ({receiptTxn.gateway}):</span>
+                  <span>-${Number(receiptTxn.fee || 0).toFixed(2)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #e6dac8', paddingTop: '6px', fontSize: '15px' }}>
+                  <strong>Thực nhận đối soát (Net):</strong>
+                  <strong style={{ color: Number(receiptTxn.net) >= 0 ? '#10b981' : '#b23b3b' }}>
+                    ${Number(receiptTxn.net || 0).toFixed(2)}
+                  </strong>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button type="button" className="secondary-button" onClick={() => setReceiptTxn(null)}>
+                Đóng
+              </button>
+              <button type="button" className="primary-button" onClick={handlePrintReceipt}>
+                🖨️ In biên lai
+              </button>
+            </div>
+          </div>
+        )}
+      </DialogModal>
+
       {/* Modal: Chi tiết giao dịch */}
       <DialogModal
         isOpen={Boolean(viewingTxn)}
@@ -374,27 +574,38 @@ export default function TransactionsPage() {
         {viewingTxn && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', fontSize: '14px' }}>
             <div style={{ padding: '14px 18px', background: '#f6f0e4', borderRadius: '10px' }}>
-              <p><strong>Cổng thanh toán:</strong> {viewingTxn.gateway} (Thẻ kết thúc bằng ••• {viewingTxn.cardLast4})</p>
-              <p><strong>Đơn hàng liên kết:</strong> #{viewingTxn.orderId}</p>
-              <p><strong>Khách hàng:</strong> {viewingTxn.customer}</p>
+              <p style={{ margin: '0 0 4px 0' }}><strong>Cổng thanh toán:</strong> {viewingTxn.gateway} (Thẻ kết thúc bằng ••• {viewingTxn.cardLast4 || '4242'})</p>
+              <p style={{ margin: '0 0 4px 0' }}><strong>Đơn hàng liên kết:</strong> #{String(viewingTxn.orderId).replace(/^#/, '')}</p>
+              <p style={{ margin: 0 }}><strong>Khách hàng:</strong> {viewingTxn.customer}</p>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', textAlign: 'center' }}>
               <div style={{ padding: '10px', background: '#fff', borderRadius: '8px', border: '1px solid #ebdccb' }}>
                 <small style={{ color: '#776c5b', display: 'block' }}>Tổng tiền thanh toán</small>
-                <strong style={{ fontSize: '18px' }}>${viewingTxn.amount.toFixed(2)}</strong>
+                <strong style={{ fontSize: '18px' }}>${Number(viewingTxn.amount || 0).toFixed(2)}</strong>
               </div>
               <div style={{ padding: '10px', background: '#fff', borderRadius: '8px', border: '1px solid #ebdccb' }}>
                 <small style={{ color: '#776c5b', display: 'block' }}>Phí cổng dịch vụ</small>
-                <strong style={{ fontSize: '18px', color: '#887d6d' }}>${viewingTxn.fee.toFixed(2)}</strong>
+                <strong style={{ fontSize: '18px', color: '#887d6d' }}>${Number(viewingTxn.fee || 0).toFixed(2)}</strong>
               </div>
               <div style={{ padding: '10px', background: '#fff', borderRadius: '8px', border: '1px solid #ebdccb' }}>
                 <small style={{ color: '#776c5b', display: 'block' }}>Số tiền thực nhận</small>
-                <strong style={{ fontSize: '18px', color: '#10b981' }}>${viewingTxn.net.toFixed(2)}</strong>
+                <strong style={{ fontSize: '18px', color: Number(viewingTxn.net) >= 0 ? '#10b981' : '#b23b3b' }}>${Number(viewingTxn.net || 0).toFixed(2)}</strong>
               </div>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => {
+                  const t = viewingTxn;
+                  setViewingTxn(null);
+                  setReceiptTxn(t);
+                }}
+              >
+                Xem biên lai in
+              </button>
               <button type="button" className="primary-button" onClick={() => setViewingTxn(null)}>
                 Đóng
               </button>
@@ -412,7 +623,7 @@ export default function TransactionsPage() {
         {refundingTxn && (
           <div>
             <p style={{ lineHeight: '1.6', marginBottom: '16px' }}>
-              Bạn có chắc chắn muốn phát lệnh hoàn trả số tiền <strong>${refundingTxn.amount.toFixed(2)}</strong> cho giao dịch <strong>{refundingTxn.id}</strong> của khách hàng <strong>{refundingTxn.customer}</strong> qua cổng {refundingTxn.gateway} không?
+              Bạn có chắc chắn muốn phát lệnh hoàn trả số tiền <strong>${Number(refundingTxn.amount || 0).toFixed(2)}</strong> cho giao dịch <strong>{refundingTxn.id}</strong> của khách hàng <strong>{refundingTxn.customer}</strong> qua cổng {refundingTxn.gateway} không?
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
               <button type="button" className="secondary-button" onClick={() => setRefundingTxn(null)}>
@@ -420,11 +631,12 @@ export default function TransactionsPage() {
               </button>
               <button 
                 type="button" 
-                className="primary-button" 
+                className="primary-button"
+                disabled={isSubmitting}
                 style={{ background: '#b23b3b', borderColor: '#b23b3b' }}
                 onClick={handleConfirmRefund}
               >
-                Xác nhận hoàn tiền
+                {isSubmitting ? 'Đang xử lý...' : 'Xác nhận hoàn tiền'}
               </button>
             </div>
           </div>
@@ -434,7 +646,7 @@ export default function TransactionsPage() {
       {/* Toasts */}
       <div className="toasts-container" style={{ position: 'fixed', bottom: '24px', right: '24px', zIndex: 99999, display: 'flex', flexDirection: 'column', gap: '8px' }}>
         {toasts.map(t => (
-          <div key={t.id} style={{ background: '#27342b', color: '#fff', padding: '10px 18px', borderRadius: '10px', fontSize: '13px' }}>
+          <div key={t.id} style={{ background: t.type === 'error' ? '#8a2323' : '#27342b', color: '#fff', padding: '10px 18px', borderRadius: '10px', fontSize: '13px' }}>
             {t.message}
           </div>
         ))}

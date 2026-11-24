@@ -53,6 +53,7 @@ export default function OrderToolbar({
             <option value="Packed">Đã đóng gói</option>
             <option value="Shipped">Đang giao hàng</option>
             <option value="Delivered">Đã giao thành công</option>
+            <option value="Cancelled">Đã hủy</option>
           </select>
         </label>
       </div>

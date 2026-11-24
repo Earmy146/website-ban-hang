@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function OverviewHeading({ onQuickAction }) {
+export default function OverviewHeading({ onRefresh, onExport, isRefreshing }) {
   return (
     <div className="dashboard-heading" style={{ marginBottom: '20px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
@@ -17,19 +17,20 @@ export default function OverviewHeading({ onQuickAction }) {
           <button 
             type="button" 
             className="secondary-button"
-            onClick={() => onQuickAction('Tải lại dữ liệu chỉ số thành công')}
+            disabled={isRefreshing}
+            onClick={onRefresh}
           >
             <span className="icon" aria-hidden="true">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor">
                 <path d="M224,128a96,96,0,0,1-96,96,95.12,95.12,0,0,1-67.89-28.11L40,176H80a8,8,0,0,0,0-16H24a8,8,0,0,0-8,8v56a8,8,0,0,0,16,0V204.69l20.44,20.43A112,112,0,0,0,240,128a8,8,0,0,0-16,0ZM32,128A96,96,0,0,1,128,32a95.12,95.12,0,0,1,67.89,28.11L216,80H176a8,8,0,0,0,0,16h56a8,8,0,0,0,8-8V32a8,8,0,0,0-16,0V51.31L203.56,30.88A112,112,0,0,0,16,128a8,8,0,0,0,16,0Z"></path>
               </svg>
             </span>
-            Làm mới
+            {isRefreshing ? 'Đang tải...' : 'Làm mới'}
           </button>
           <button 
             type="button" 
             className="primary-button"
-            onClick={() => onQuickAction('Đang xuất báo cáo tổng hợp')}
+            onClick={onExport}
           >
             Xuất báo cáo
           </button>
@@ -38,4 +39,3 @@ export default function OverviewHeading({ onQuickAction }) {
     </div>
   );
 }
-

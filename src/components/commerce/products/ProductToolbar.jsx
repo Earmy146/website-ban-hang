@@ -1,5 +1,15 @@
 import React from 'react';
 
+const DEFAULT_CATEGORIES = [
+  'Thời trang & May mặc',
+  'Balo & Túi xách',
+  'Đồ gia dụng & Nội thất',
+  'Thiết bị công nghệ',
+  'Phụ kiện thời trang',
+  'Phụ kiện đời sống',
+  'Văn phòng phẩm',
+];
+
 export default function ProductToolbar({
   searchQuery,
   onSearchChange,
@@ -8,8 +18,17 @@ export default function ProductToolbar({
   selectedStatus,
   onStatusChange,
   showDeleted,
-  onToggleDeleted
+  onToggleDeleted,
+  categories = []
 }) {
+  const categoryOptions = Array.from(
+    new Set([
+      ...DEFAULT_CATEGORIES,
+      ...(Array.isArray(categories) ? categories.filter(Boolean) : []),
+      ...(selectedCategory ? [selectedCategory] : []),
+    ])
+  );
+
   return (
     <section className="glass-card product-filter-card">
       <div className="c-toolbar product-toolbar">
@@ -19,14 +38,14 @@ export default function ProductToolbar({
           <select 
             value={selectedCategory} 
             onChange={e => onCategoryChange(e.target.value)}
+            aria-label="Lọc theo danh mục"
           >
             <option value="">Tất cả danh mục</option>
-            <option value="Thời trang & May mặc">Thời trang & May mặc</option>
-            <option value="Balo & Túi xách">Balo & Túi xách</option>
-            <option value="Đồ gia dụng & Nội thất">Đồ gia dụng & Nội thất</option>
-            <option value="Thiết bị công nghệ">Thiết bị công nghệ</option>
-            <option value="Phụ kiện thời trang">Phụ kiện thời trang</option>
-            <option value="Văn phòng phẩm">Văn phòng phẩm</option>
+            {categoryOptions.map((cat) => (
+              <option key={cat} value={cat}>
+                {cat}
+              </option>
+            ))}
           </select>
         </label>
 
@@ -36,6 +55,7 @@ export default function ProductToolbar({
           <select 
             value={selectedStatus} 
             onChange={e => onStatusChange(e.target.value)}
+            aria-label="Lọc theo trạng thái"
           >
             <option value="">Tất cả trạng thái</option>
             <option value="Active">Đang bán</option>
@@ -64,7 +84,7 @@ export default function ProductToolbar({
           </span>
           <input 
             type="search" 
-            placeholder="Tìm kiếm theo tên sản phẩm hoặc mã SKU..." 
+            placeholder="Tìm kiếm theo tên sản phẩm, thương hiệu hoặc mã SKU..." 
             value={searchQuery}
             onChange={e => onSearchChange(e.target.value)}
             aria-label="Tìm kiếm sản phẩm"
@@ -74,4 +94,3 @@ export default function ProductToolbar({
     </section>
   );
 }
-

@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 
 export default function OrderRowMenu({
   order,
@@ -14,14 +15,21 @@ export default function OrderRowMenu({
 
   const toggleMenu = (e) => {
     e.stopPropagation();
-    if (!isOpen) {
-      const rect = triggerRef.current?.getBoundingClientRect();
-      if (rect) {
-        setCoords({
-          top: rect.bottom + window.scrollY + 6,
-          left: Math.max(12, rect.right + window.scrollX - 180)
-        });
+    if (!isOpen && triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      const menuWidth = 228;
+      const menuHeight = 195;
+      let left = rect.right - menuWidth;
+      if (left < 12) left = 12;
+      if (left + menuWidth > window.innerWidth - 12) {
+        left = window.innerWidth - menuWidth - 12;
       }
+
+      let top = rect.bottom + 6;
+      if (top + menuHeight > window.innerHeight - 12) {
+        top = Math.max(12, rect.top - menuHeight - 6);
+      }
+      setCoords({ top, left });
       setIsOpen(true);
     } else {
       setIsOpen(false);
@@ -29,6 +37,7 @@ export default function OrderRowMenu({
   };
 
   useEffect(() => {
+    if (!isOpen) return;
     const handleClickOutside = (e) => {
       if (
         menuRef.current && !menuRef.current.contains(e.target) &&
@@ -37,13 +46,15 @@ export default function OrderRowMenu({
         setIsOpen(false);
       }
     };
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      window.addEventListener('scroll', handleClickOutside, { passive: true });
-    }
+    const handleScroll = (e) => {
+      if (menuRef.current && menuRef.current.contains(e.target)) return;
+      setIsOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('scroll', handleScroll, true);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
-      window.removeEventListener('scroll', handleClickOutside);
+      window.removeEventListener('scroll', handleScroll, true);
     };
   }, [isOpen]);
 
@@ -64,18 +75,19 @@ export default function OrderRowMenu({
         </span>
       </button>
 
-      {isOpen && (
+      {isOpen && createPortal(
         <div 
           ref={menuRef}
           className="product-row-menu-panel order-row-menu-panel is-positioned"
           style={{
-            position: 'absolute',
+            position: 'fixed',
             top: `${coords.top}px`,
             left: `${coords.left}px`,
             zIndex: 9999,
             display: 'flex',
             flexDirection: 'column'
           }}
+          onClick={e => e.stopPropagation()}
         >
           <button 
             type="button" 
@@ -137,9 +149,9 @@ export default function OrderRowMenu({
             </span>
             <span>Hủy đơn hàng</span>
           </button>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
 }
-

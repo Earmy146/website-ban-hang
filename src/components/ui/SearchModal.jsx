@@ -1,10 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { QUICK_SEARCH_ITEMS } from '../../data/storeData';
 import navData from '../../data/navigation.json';
+import api from '../../services/api';
 
 export default function SearchModal({ isOpen, onClose }) {
   const [query, setQuery] = useState('');
+  const [apiResults, setApiResults] = useState(null);
+  const [isSearching, setIsSearching] = useState(false);
   const inputRef = useRef(null);
   const navigate = useNavigate();
 
@@ -13,32 +16,77 @@ export default function SearchModal({ isOpen, onClose }) {
       setTimeout(() => inputRef.current?.focus(), 50);
     } else {
       setQuery('');
+      setApiResults(null);
     }
   }, [isOpen]);
 
-  // Gom thêm danh sách các trang từ navData vào danh sách tìm kiếm
-  const allSearchable = [
-    ...QUICK_SEARCH_ITEMS,
-    ...navData.flatMap(group => 
+  useEffect(() => {
+    if (!isOpen) return;
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const data = await api.quickSearch(query.trim(), controller.signal);
+        if (Array.isArray(data)) {
+          setApiResults(data);
+        }
+      } catch (err) {
+        if (err?.name !== 'AbortError') {
+          setApiResults(null);
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsSearching(false);
+        }
+      }
+    }, query.trim() ? 150 : 0);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [isOpen, query]);
+
+  // Danh sách các trang từ navData
+  const navPages = useMemo(() => {
+    return navData.flatMap(group =>
       group.items.flatMap(item => {
-        if (item.type === 'link') return [{ type: 'page', id: item.path, title: item.title, subtitle: `Trang · ${group.groupTitle}`, path: item.path }];
+        if (item.type === 'link') {
+          return [{ type: 'page', id: item.path, title: item.title, subtitle: `Trang · ${group.groupTitle}`, path: item.path }];
+        }
         return (item.children || []).map(child => ({
           type: 'page',
           id: child.path,
           title: child.title,
           subtitle: `Trang · ${item.title}`,
-          path: child.path
+          path: child.path,
         }));
       })
-    )
-  ];
+    );
+  }, []);
 
-  const filtered = query.trim() === '' 
-    ? QUICK_SEARCH_ITEMS 
-    : allSearchable.filter(item => 
-        item.title.toLowerCase().includes(query.toLowerCase()) || 
-        item.subtitle.toLowerCase().includes(query.toLowerCase())
-      );
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) {
+      if (Array.isArray(apiResults) && apiResults.length > 0) {
+        return apiResults;
+      }
+      return QUICK_SEARCH_ITEMS;
+    }
+
+    const matchingPages = navPages.filter(
+      p => p.title.toLowerCase().includes(q) || p.subtitle.toLowerCase().includes(q)
+    );
+
+    if (Array.isArray(apiResults)) {
+      return [...apiResults, ...matchingPages];
+    }
+
+    const fallbackMatches = QUICK_SEARCH_ITEMS.filter(
+      item => item.title.toLowerCase().includes(q) || item.subtitle.toLowerCase().includes(q)
+    );
+    return [...fallbackMatches, ...matchingPages];
+  }, [query, apiResults, navPages]);
 
   if (!isOpen) return null;
 
@@ -77,7 +125,7 @@ export default function SearchModal({ isOpen, onClose }) {
           alignItems: 'center'
         }}>
           <h2 id="dialog-title" style={{ fontSize: '15px', margin: 0, fontWeight: '600' }}>
-            Tìm kiếm nhanh trong cửa hàng
+            Tìm kiếm nhanh trong cửa hàng {isSearching && <small style={{ fontWeight: '400', color: '#887d6d', fontSize: '12px' }}>(Đang tìm...)</small>}
           </h2>
           <button 
             type="button" 
@@ -122,7 +170,7 @@ export default function SearchModal({ isOpen, onClose }) {
             ) : (
               filtered.map((item, idx) => (
                 <button 
-                  key={idx}
+                  key={`${item.type}-${item.id}-${idx}`}
                   type="button" 
                   className="search-result"
                   onClick={() => {
@@ -150,6 +198,10 @@ export default function SearchModal({ isOpen, onClose }) {
                       {item.type === 'order' ? (
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor">
                           <path d="M168,152a8,8,0,0,1-8,8H96a8,8,0,0,1,0-16h64A8,8,0,0,1,168,152Zm-8-40H96a8,8,0,0,0,0,16h64a8,8,0,0,0,0-16Zm56-64V216a16,16,0,0,1-16,16H56a16,16,0,0,1-16-16V48A16,16,0,0,1,56,32H92.26a47.92,47.92,0,0,1,71.48,0H200A16,16,0,0,1,216,48ZM96,64h64a32,32,0,0,0-64,0ZM200,48H173.25A47.93,47.93,0,0,1,176,64v8a8,8,0,0,1-8,8H88a8,8,0,0,1-8-8V64a47.93,47.93,0,0,1,2.75-16H56V216H200Z"></path>
+                        </svg>
+                      ) : item.type === 'customer' ? (
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor">
+                          <path d="M230.92,212c-15.23-26.33-38.7-45.21-66.09-54.16a72,72,0,1,0-73.66,0C63.78,166.78,40.31,185.66,25.08,212a8,8,0,1,0,13.85,8c18.84-32.56,52.14-52,89.07-52s70.23,19.44,89.07,52a8,8,0,1,0,13.85-8ZM72,96a56,56,0,1,1,56,56A56.06,56.06,0,0,1,72,96Z"></path>
                         </svg>
                       ) : (
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor">

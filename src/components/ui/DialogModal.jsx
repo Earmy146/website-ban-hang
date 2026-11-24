@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 
 export default function DialogModal({ isOpen, title, children, onClose, wide = false }) {
   useEffect(() => {
@@ -13,7 +14,7 @@ export default function DialogModal({ isOpen, title, children, onClose, wide = f
 
   if (!isOpen) return null;
 
-  return (
+  return createPortal(
     <div 
       className="modal-backdrop-overlay" 
       style={{
@@ -100,6 +101,7 @@ export default function DialogModal({ isOpen, title, children, onClose, wide = f
           {children}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
